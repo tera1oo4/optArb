@@ -10,6 +10,9 @@
     "@optarb/core": "workspace:*",
     "@optarb/persistence": "workspace:*",
     "@optarb/venue-deribit": "workspace:*",
+    "@optarb/venue-bybit": "workspace:*",
+    "@optarb/venue-okx": "workspace:*",
+    "@optarb/venue-binance": "workspace:*",
     "pino": "^9.6.0"
   },
   "devDependencies": {

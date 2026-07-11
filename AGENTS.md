@@ -16,27 +16,41 @@
 - **decimal.js / fixed-point bigint для всех цен и количеств — `number`-float в финансовых расчётах запрещён**
 - Время: epoch ms UTC; `Date.now()` только через интерфейс `Clock` (ADR-0004)
 
-## Структура (целевая, ADR-0004)
+## Структура (ADR-0004)
 
 ```
-packages/core | venues/{deribit,binance,bybit,okx,polymarket} | marketdata |
-pricing | signals | execution | risk | persistence | backtest
-apps/collector | apps/trader | apps/backtest
+packages/core             — доменная модель, EventBus, Clock, CaptureSink, L2Book, BaseWsConnector
+packages/persistence      — JSONL capture + replay reader
+packages/venues/deribit   — Deribit WS (testnet/prod)
+packages/venues/bybit     — Bybit V5 option WS (testnet/prod)
+packages/venues/okx       — OKX V5 option WS (demo/prod; REST требует browser User-Agent)
+packages/venues/binance   — Binance options: fstream (markPrice + diff depth + trades, prod read-only)
+packages/marketdata       — (M2) USD-нормализация, consolidated view
+packages/signals          — (M2) детекторы арбитража
+packages/pricing          — (M3) Black-76, вероятности для digital-контрактов
+apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
+apps/backtest             — replay capture-файлов (multi-venue)
+apps/trader               — (M2) paper/live
 ```
 
 ## Команды
 
-> Проект на стадии дизайна; `package.json` ещё не создан. После scaffolding ожидаются:
-
 ```bash
-pnpm install            # установка зависимостей
-pnpm build              # сборка всех пакетов
-pnpm test               # vitest (unit + replay)
-pnpm lint               # eslint + prettier --check
-pnpm dev:collector      # сбор рыночных данных + capture
-pnpm dev:trader         # paper-режим по умолчанию
-pnpm backtest -- <file> # replay capture-файла
+pnpm install            # установка зависимостей (pnpm 11: allowBuilds для esbuild уже в pnpm-workspace.yaml)
+pnpm build              # typecheck всех пакетов
+pnpm test               # vitest (unit)
+pnpm lint               # tsc --noEmit + prettier --check
+pnpm format             # prettier --write
+pnpm dev:collector      # сбор рыночных данных + capture (env: VENUES=deribit,bybit,okx,binance)
+pnpm backtest <file>    # replay capture-файла
 ```
+
+### Venue-специфика (важно)
+
+- Deribit: testnet по умолчанию; IV в процентах → делится на 100 в парсере; interval-каналы (.100ms) шлют полные snapshot'ы книги
+- Bybit: testnet по умолчанию; heartbeat `{"op":"ping"}` 20s; IV — доля; orderbook delta: `u === prevU+1`, иначе resync; **multiplier 1 BTC не отдаётся API** — конфиг `contractMultiplier` (эмпирика 2026-07-11); testnet шлёт orderbook-снапшоты только для depth 25
+- OKX: demo по умолчанию (`x-simulated-trading: 1`, wspap); REST требует browser User-Agent (Cloudflare 403); heartbeat — сырой текст `ping`/`pong`; books5 — полный top-5 каждый пуш; multiplier = ctVal×ctMult (0.01 BTC); demo-инструменты фильтруются по `instFamily === uly`
+- Binance: testnet для опционов **не существует** — только prod public read-only; старый `nbstream/eoptions` снят (404), стримы на `fstream.binance.com`: markPrice на `/market/stream`, depth/trades на `/public/stream`; символы в stream-именах **lowercase**; depth — futures-style diff (pu-цепочка), REST `/eapi/v1/depth` отстаёт → rebase-модель (replace + новая цепочка); один `{uly}usdt@optionMarkPrice` покрывает тикеры+греки всего рынка
 
 ## Правила кодирования
 

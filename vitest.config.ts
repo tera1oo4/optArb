@@ -9,6 +9,9 @@ export default defineConfig({
       '@optarb/core': r('./packages/core/src/index.ts'),
       '@optarb/persistence': r('./packages/persistence/src/index.ts'),
       '@optarb/venue-deribit': r('./packages/venues/deribit/src/index.ts'),
+      '@optarb/venue-bybit': r('./packages/venues/bybit/src/index.ts'),
+      '@optarb/venue-okx': r('./packages/venues/okx/src/index.ts'),
+      '@optarb/venue-binance': r('./packages/venues/binance/src/index.ts'),
     },
   },
   test: {

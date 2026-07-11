@@ -1,12 +1,67 @@
 import pino from 'pino';
-import { emitAll, InMemoryEventBus, VirtualClock } from '@optarb/core';
+import {
+  emitAll,
+  InMemoryEventBus,
+  VirtualClock,
+  type AppEventMap,
+  type AppEventType,
+  type Venue,
+} from '@optarb/core';
 import { readCapture } from '@optarb/persistence';
-import { createMarketContext, handleRawMessage, SequenceGapError } from '@optarb/venue-deribit';
+import * as deribit from '@optarb/venue-deribit';
+import * as bybit from '@optarb/venue-bybit';
+import * as okx from '@optarb/venue-okx';
+import * as binance from '@optarb/venue-binance';
 
 /**
  * Replay engine v0 (ADR-0004): feeds a JSONL capture through the SAME
- * normalization pipeline as the live connector, on a virtual clock.
+ * normalization pipeline as the live connectors, on a virtual clock.
+ * Each venue keeps its own market context; entries route by `venue`.
  */
+interface VenueReplay {
+  handle: (raw: unknown) => { type: AppEventType; payload: AppEventMap[AppEventType] }[];
+  onGap: (err: unknown) => boolean;
+}
+
+function makeVenueReplays(nowMs: () => number): Partial<Record<Venue, VenueReplay>> {
+  const dctx = deribit.createMarketContext({ nowMs });
+  const bctx = bybit.createMarketContext({ nowMs });
+  const octx = okx.createMarketContext({ nowMs });
+  const bnctx = binance.createMarketContext({ nowMs });
+  return {
+    deribit: {
+      handle: (raw) => deribit.handleRawMessage(raw, dctx),
+      onGap: (err) => {
+        if (!(err instanceof deribit.SequenceGapError)) return false;
+        dctx.books.get(err.instrument)?.reset();
+        dctx.books.delete(err.instrument);
+        return true;
+      },
+    },
+    bybit: {
+      handle: (raw) => bybit.handleRawMessage(raw, bctx),
+      onGap: (err) => {
+        if (!(err instanceof bybit.SequenceGapError)) return false;
+        bctx.books.delete(err.instrument);
+        bctx.bookSeq.delete(err.instrument);
+        return true;
+      },
+    },
+    okx: {
+      handle: (raw) => okx.handleRawMessage(raw, octx),
+      onGap: () => false,
+    },
+    binance: {
+      handle: (raw) => binance.handleRawMessage(raw, bnctx),
+      onGap: (err) => {
+        if (!(err instanceof binance.SequenceGapError)) return false;
+        binance.resetBook(bnctx, err.instrument);
+        return true;
+      },
+    },
+  };
+}
+
 async function main(): Promise<void> {
   const file = process.argv[2];
   if (!file) {
@@ -18,12 +73,14 @@ async function main(): Promise<void> {
   const bus = new InMemoryEventBus();
   const clock = new VirtualClock();
 
-  const counters = { book: 0, trade: 0, ticker: 0 };
-  bus.on('market.book', () => counters.book++);
-  bus.on('market.trade', () => counters.trade++);
-  bus.on('market.ticker', () => counters.ticker++);
+  const counters: Record<string, { book: number; trade: number; ticker: number }> = {};
+  for (const v of ['deribit', 'bybit', 'okx', 'binance'])
+    counters[v] = { book: 0, trade: 0, ticker: 0 };
+  bus.on('market.book', (e) => counters[e.venue]!.book++);
+  bus.on('market.trade', (e) => counters[e.venue]!.trade++);
+  bus.on('market.ticker', (e) => counters[e.venue]!.ticker++);
 
-  const ctx = createMarketContext({ nowMs: () => clock.nowMs() });
+  const replays = makeVenueReplays(() => clock.nowMs());
 
   let raw = 0;
   let skipped = 0;
@@ -32,18 +89,17 @@ async function main(): Promise<void> {
 
   for await (const entry of readCapture(file)) {
     raw++;
-    if (entry.venue !== 'deribit' || entry.direction !== 'in') {
+    const replay = replays[entry.venue];
+    if (!replay || entry.direction !== 'in') {
       skipped++;
       continue;
     }
     clock.set(entry.tsMs);
     try {
-      emitAll(bus, handleRawMessage(entry.payload, ctx));
+      emitAll(bus, replay.handle(entry.payload));
     } catch (err) {
-      if (err instanceof SequenceGapError) {
+      if (replay.onGap(err)) {
         gaps++;
-        ctx.books.get(err.instrument)?.reset();
-        ctx.books.delete(err.instrument);
       } else {
         skipped++;
         log.warn({ err: String(err) }, 'replay: skipped malformed entry');

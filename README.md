@@ -55,5 +55,6 @@
 1. ✅ Git: `origin` → https://github.com/tera1oo4/optArb.git (ветка `main`); push — только после ревью и diff-анализа (`/skill:release-review`)
 2. ✅ Scaffolding pnpm-workspaces: `packages/{core,persistence,venues/deribit}`, `apps/{collector,backtest}`; 22 теста, typecheck+prettier зелёные
 3. ✅ Коннектор Deribit (testnet): WS + heartbeat + reconnect + book resync + capture → replay через тот же pipeline (`pnpm dev:collector`, `pnpm backtest <file>`)
-4. Коннекторы Bybit/OKX/Binance → нормализация → первые cross-venue сигналы (paper)
-5. Polymarket connector (read-only) → digital-vs-vanilla детектор
+4. ✅ Коннекторы Bybit (testnet), OKX (demo), Binance (prod read-only): общий `BaseWsConnector` + `L2Book` в core; multi-venue collector (`VENUES=...`) и multi-venue replay; 53 теста; smoke: все 4 биржи live, 0 gaps на replay
+5. `packages/marketdata` (USD-нормализация, consolidated view) → `packages/signals` (cross-venue детектор) → `apps/trader` paper
+6. Polymarket connector (read-only) → `packages/pricing` (Black-76) → digital-vs-vanilla детектор
