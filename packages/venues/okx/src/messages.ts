@@ -28,6 +28,26 @@ export const OkxTickerDataSchema = z
   })
   .passthrough();
 
+/* ------------------------- index-tickers / mark-price ------------------------- */
+
+/** `index-tickers` channel: index price for the underlying (e.g. BTC-USD). */
+export const OkxIndexTickerSchema = z
+  .object({
+    instId: z.string(),
+    idxPx: z.string(),
+    ts: z.string(),
+  })
+  .passthrough();
+
+/** `mark-price` channel: mark price per option (coin-denominated). */
+export const OkxMarkPriceSchema = z
+  .object({
+    instId: z.string(),
+    markPx: z.string(),
+    ts: z.string(),
+  })
+  .passthrough();
+
 /* ------------------------------- books5 ------------------------------- */
 
 /** [price, size, deprecated, orderCount] — full top-5 book per push */

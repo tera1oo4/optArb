@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assertHttpOk,
   BaseWsConnector,
   dec,
   emitAll,
@@ -146,7 +147,7 @@ export class BinanceConnector implements VenueConnector {
 
   async loadInstruments(): Promise<Instrument[]> {
     const res = await fetch(`${this.config.restUrl}/eapi/v1/exchangeInfo`);
-    if (!res.ok) throw new Error(`binance exchangeInfo failed: HTTP ${res.status}`);
+    await assertHttpOk(res, 'binance exchangeInfo');
     const json: unknown = await res.json();
     const parsed = ExchangeInfoSchema.parse(json);
 
@@ -234,7 +235,7 @@ export class BinanceConnector implements VenueConnector {
         `${this.config.restUrl}/eapi/v1/depth` +
         `?symbol=${encodeURIComponent(symbol)}&limit=${this.config.bookDepth}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await assertHttpOk(res, 'binance depth');
       const json: unknown = await res.json();
       const snapshot = RestDepthSchema.parse(json);
       const events = applyRestSnapshot(this.ctx, symbol, snapshot);

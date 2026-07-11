@@ -10,6 +10,8 @@ import {
 import {
   numOrNull,
   OkxBooks5DataSchema,
+  OkxIndexTickerSchema,
+  OkxMarkPriceSchema,
   OkxTickerDataSchema,
   OkxTradeSchema,
   OkxWsMessageSchema,
@@ -24,24 +26,26 @@ export interface DispatchedEvent {
 
 interface TickerState {
   markPrice: Decimal | null;
-  indexPrice: Decimal | null;
-  markIv: Decimal | null;
   bestBid: Decimal | null;
   bestAsk: Decimal | null;
-  delta: Decimal | null;
-  gamma: Decimal | null;
-  theta: Decimal | null;
-  vega: Decimal | null;
+  tsMs: number;
 }
 
 /**
  * Shared normalization context used identically by the live connector and by
  * replay (ADR-0004): same code path, only the message source differs.
+ *
+ * OKX public WS splits option data across channels: `tickers` (bid/ask/last
+ * only), `mark-price` (markPx per instrument), `index-tickers` (index for the
+ * underlying). IV/greeks are not available on public WS (opt-summary is
+ * REST-only) → markIv/greeks stay null. Ticker events carry the merged state.
  */
 export interface OkxMarketContext {
   instruments: Map<string, Instrument>;
   books: Map<string, L2Book>;
   tickerState: Map<string, TickerState>;
+  /** Latest index price per underlying id (e.g. 'BTC-USD'), from index-tickers */
+  indexPrices: Map<string, Decimal>;
   bookDepth: number;
   nowMs: () => number;
 }
@@ -54,6 +58,7 @@ export function createMarketContext(opts?: {
     instruments: new Map(),
     books: new Map(),
     tickerState: new Map(),
+    indexPrices: new Map(),
     bookDepth: opts?.bookDepth ?? 5,
     nowMs: opts?.nowMs ?? Date.now,
   };
@@ -75,7 +80,8 @@ export function ensureInstrument(ctx: OkxMarketContext, instId: string): Instrum
       optionType: p.optionType,
       // OKX BTC options: ctVal 1 × ctMult 0.01 = 0.01 coin per contract.
       contractMultiplier: dec('0.01'),
-      quoteCurrency: 'USD',
+      // Premiums are coin-quoted (bidPx 0.017 = BTC), verified on prod 2026-07-11.
+      quoteCurrency: p.underlying,
       settleCurrency: p.underlying,
     };
     ctx.instruments.set(instId, inst);
@@ -83,66 +89,70 @@ export function ensureInstrument(ctx: OkxMarketContext, instId: string): Instrum
   return inst;
 }
 
+/** Underlying id of an option instId: BTC-USD-260712-63000-C → BTC-USD */
+function ulyOf(instId: string): string {
+  const parts = instId.split('-');
+  return parts.length >= 2 ? `${parts[0]}-${parts[1]}` : instId;
+}
+
+function stateFor(ctx: OkxMarketContext, instId: string): TickerState {
+  let st = ctx.tickerState.get(instId);
+  if (!st) {
+    st = { markPrice: null, bestBid: null, bestAsk: null, tsMs: 0 };
+    ctx.tickerState.set(instId, st);
+  }
+  return st;
+}
+
+function tickerEvent(
+  ctx: OkxMarketContext,
+  inst: Instrument,
+  st: TickerState,
+  tsMs: number,
+  recvMs: number,
+): DispatchedEvent {
+  if (tsMs >= st.tsMs) st.tsMs = tsMs;
+  return {
+    type: 'market.ticker',
+    payload: {
+      venue: 'okx',
+      instrumentId: inst.id,
+      tsMs: st.tsMs,
+      recvMs,
+      markPrice: st.markPrice,
+      indexPrice: ctx.indexPrices.get(ulyOf(inst.venueSymbol)) ?? null,
+      markIv: null, // not available on OKX public WS (opt-summary is REST-only)
+      greeks: null,
+      bestBid: st.bestBid,
+      bestAsk: st.bestAsk,
+      quoteCurrency: inst.quoteCurrency,
+    },
+  };
+}
+
 function handleTicker(data: unknown, ctx: OkxMarketContext, recvMs: number): DispatchedEvent[] {
   const t = OkxTickerDataSchema.parse(data);
   const inst = ensureInstrument(ctx, t.instId);
-  let st = ctx.tickerState.get(t.instId);
-  if (!st) {
-    st = {
-      markPrice: null,
-      indexPrice: null,
-      markIv: null,
-      bestBid: null,
-      bestAsk: null,
-      delta: null,
-      gamma: null,
-      theta: null,
-      vega: null,
-    };
-    ctx.tickerState.set(t.instId, st);
-  }
-  const merge = (field: keyof TickerState, raw: string | undefined) => {
-    const v = numOrNull(raw);
-    if (v !== null) st[field] = v;
-  };
-  merge('markPrice', t.markPx);
-  merge('indexPrice', t.idxPx);
-  merge('markIv', t.markVol);
-  merge('bestBid', t.bidPx);
-  merge('bestAsk', t.askPx);
-  merge('delta', t.delta);
-  merge('gamma', t.gamma);
-  merge('theta', t.theta);
-  merge('vega', t.vega);
+  const st = stateFor(ctx, t.instId);
+  const bid = numOrNull(t.bidPx);
+  const ask = numOrNull(t.askPx);
+  if (bid !== null) st.bestBid = bid;
+  if (ask !== null) st.bestAsk = ask;
+  return [tickerEvent(ctx, inst, st, Number(t.ts), recvMs)];
+}
 
-  const greeks =
-    st.delta || st.gamma || st.theta || st.vega
-      ? {
-          delta: st.delta ?? undefined,
-          gamma: st.gamma ?? undefined,
-          theta: st.theta ?? undefined,
-          vega: st.vega ?? undefined,
-        }
-      : null;
+function handleMarkPrice(data: unknown, ctx: OkxMarketContext, recvMs: number): DispatchedEvent[] {
+  const m = OkxMarkPriceSchema.parse(data);
+  const inst = ensureInstrument(ctx, m.instId);
+  const st = stateFor(ctx, m.instId);
+  st.markPrice = dec(m.markPx);
+  return [tickerEvent(ctx, inst, st, Number(m.ts), recvMs)];
+}
 
-  return [
-    {
-      type: 'market.ticker',
-      payload: {
-        venue: 'okx',
-        instrumentId: inst.id,
-        tsMs: Number(t.ts),
-        recvMs,
-        markPrice: st.markPrice,
-        indexPrice: st.indexPrice,
-        markIv: st.markIv,
-        greeks,
-        bestBid: st.bestBid,
-        bestAsk: st.bestAsk,
-        quoteCurrency: inst.quoteCurrency,
-      },
-    },
-  ];
+function handleIndexTicker(data: unknown, ctx: OkxMarketContext): DispatchedEvent[] {
+  const idx = OkxIndexTickerSchema.parse(data);
+  ctx.indexPrices.set(idx.instId, dec(idx.idxPx));
+  return []; // index feeds USD normalization downstream, no event of its own
 }
 
 function handleBooks5(
@@ -210,6 +220,8 @@ export function handleRawMessage(raw: unknown, ctx: OkxMarketContext): Dispatche
   const events: DispatchedEvent[] = [];
   for (const item of msg.data.data) {
     if (channel === 'tickers') events.push(...handleTicker(item, ctx, recvMs));
+    else if (channel === 'mark-price') events.push(...handleMarkPrice(item, ctx, recvMs));
+    else if (channel === 'index-tickers') events.push(...handleIndexTicker(item, ctx));
     else if (channel === 'books5' && instId)
       events.push(...handleBooks5(instId, item, ctx, recvMs));
     else if (channel === 'trades') events.push(...handleTrade(item, ctx, recvMs));

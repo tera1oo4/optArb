@@ -66,18 +66,43 @@ importers:
       '@optarb/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
-      '@optarb/venue-binance':
+      '@optarb/venues':
         specifier: workspace:*
-        version: link:../../packages/venues/binance
-      '@optarb/venue-bybit':
+        version: link:../../packages/venues/all
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  apps/trader:
+    dependencies:
+      '@optarb/core':
         specifier: workspace:*
-        version: link:../../packages/venues/bybit
-      '@optarb/venue-deribit':
+        version: link:../../packages/core
+      '@optarb/marketdata':
         specifier: workspace:*
-        version: link:../../packages/venues/deribit
-      '@optarb/venue-okx':
+        version: link:../../packages/marketdata
+      '@optarb/signals':
         specifier: workspace:*
-        version: link:../../packages/venues/okx
+        version: link:../../packages/signals
+      '@optarb/venues':
+        specifier: workspace:*
+        version: link:../../packages/venues/all
       dotenv:
         specifier: ^16.4.7
         version: 16.6.1
@@ -120,11 +145,65 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/marketdata:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/persistence:
     dependencies:
       '@optarb/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/signals:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+      '@optarb/marketdata':
+        specifier: workspace:*
+        version: link:../marketdata
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/venues/all:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@optarb/venue-binance':
+        specifier: workspace:*
+        version: link:../binance
+      '@optarb/venue-bybit':
+        specifier: workspace:*
+        version: link:../bybit
+      '@optarb/venue-deribit':
+        specifier: workspace:*
+        version: link:../deribit
+      '@optarb/venue-okx':
+        specifier: workspace:*
+        version: link:../okx
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

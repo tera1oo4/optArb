@@ -14,7 +14,8 @@
     "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
     "lint": "pnpm typecheck && prettier --check \"**/*.{ts,json,yaml,yml}\"",
     "format": "prettier --write \"**/*.{ts,json,yaml,yml}\"",
-    "build": "pnpm typecheck"
+    "build": "pnpm typecheck",
+    "dev:trader": "pnpm --filter @optarb/trader dev"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

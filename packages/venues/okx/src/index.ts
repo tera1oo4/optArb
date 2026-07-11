@@ -7,6 +7,8 @@ export type { OkxMarketContext, DispatchedEvent } from './dispatch.js';
 export {
   OkxWsMessageSchema,
   OkxTickerDataSchema,
+  OkxIndexTickerSchema,
+  OkxMarkPriceSchema,
   OkxBooks5DataSchema,
   OkxTradeSchema,
 } from './messages.js';

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assertHttpOk,
   BaseWsConnector,
   dec,
   emitAll,
@@ -104,7 +105,7 @@ export class BybitConnector extends BaseWsConnector implements VenueConnector {
         `?category=option&baseCoin=${this.config.baseCoin}&limit=1000` +
         (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
       const res = await fetch(url);
-      if (!res.ok) throw new Error(`bybit instruments-info failed: HTTP ${res.status}`);
+      await assertHttpOk(res, 'bybit instruments-info');
       const json: unknown = await res.json();
       const parsed = InstrumentsResponseSchema.parse(json);
       if (parsed.retCode !== 0) throw new Error('bybit instruments-info: non-zero retCode');

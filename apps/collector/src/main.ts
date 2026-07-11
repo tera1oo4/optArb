@@ -1,11 +1,8 @@
 import 'dotenv/config';
 import pino from 'pino';
-import { InMemoryEventBus, LiveClock, type Logger, type VenueConnector } from '@optarb/core';
+import { InMemoryEventBus, LiveClock, type Logger } from '@optarb/core';
 import { JsonlCaptureSink } from '@optarb/persistence';
-import { DeribitConnector } from '@optarb/venue-deribit';
-import { BybitConnector } from '@optarb/venue-bybit';
-import { OkxConnector } from '@optarb/venue-okx';
-import { BinanceConnector } from '@optarb/venue-binance';
+import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import { loadConfig, type CollectorConfig } from './config.js';
 
 function toLogger(log: pino.Logger): Logger {
@@ -17,59 +14,38 @@ function toLogger(log: pino.Logger): Logger {
   };
 }
 
-function buildConnectors(
-  cfg: CollectorConfig,
-  deps: ConstructorParameters<typeof DeribitConnector>[1],
-): VenueConnector[] {
-  return cfg.VENUES.map((venue) => {
-    switch (venue) {
-      case 'deribit':
-        return new DeribitConnector(
-          {
-            wsUrl: cfg.DERIBIT_WS_URL,
-            restUrl: cfg.DERIBIT_REST_URL,
-            currency: cfg.DERIBIT_CURRENCY,
-            maxInstruments: cfg.DERIBIT_MAX_INSTRUMENTS,
-            bookDepth: cfg.DERIBIT_BOOK_DEPTH,
-          },
-          deps,
-        );
-      case 'bybit':
-        return new BybitConnector(
-          {
-            wsUrl: cfg.BYBIT_WS_URL,
-            restUrl: cfg.BYBIT_REST_URL,
-            baseCoin: cfg.BYBIT_BASE_COIN,
-            maxInstruments: cfg.BYBIT_MAX_INSTRUMENTS,
-            bookDepth: cfg.BYBIT_BOOK_DEPTH as 1 | 25 | 50 | 100 | 200,
-          },
-          deps,
-        );
-      case 'okx':
-        return new OkxConnector(
-          {
-            wsUrl: cfg.OKX_WS_URL,
-            restUrl: cfg.OKX_REST_URL,
-            demoTrading: cfg.OKX_DEMO_TRADING,
-            uly: cfg.OKX_ULY,
-            maxInstruments: cfg.OKX_MAX_INSTRUMENTS,
-          },
-          deps,
-        );
-      case 'binance':
-        return new BinanceConnector(
-          {
-            marketWsUrl: cfg.BINANCE_MARKET_WS_URL,
-            publicWsUrl: cfg.BINANCE_PUBLIC_WS_URL,
-            restUrl: cfg.BINANCE_REST_URL,
-            underlyings: [...cfg.BINANCE_UNDERLYINGS],
-            maxInstruments: cfg.BINANCE_MAX_INSTRUMENTS,
-            bookDepth: cfg.BINANCE_BOOK_DEPTH as 10 | 20 | 50 | 100,
-          },
-          deps,
-        );
-    }
-  });
+export function venueConfigs(cfg: CollectorConfig): VenueRuntimeConfigs {
+  return {
+    deribit: {
+      wsUrl: cfg.DERIBIT_WS_URL,
+      restUrl: cfg.DERIBIT_REST_URL,
+      currency: cfg.DERIBIT_CURRENCY,
+      maxInstruments: cfg.DERIBIT_MAX_INSTRUMENTS,
+      bookDepth: cfg.DERIBIT_BOOK_DEPTH,
+    },
+    bybit: {
+      wsUrl: cfg.BYBIT_WS_URL,
+      restUrl: cfg.BYBIT_REST_URL,
+      baseCoin: cfg.BYBIT_BASE_COIN,
+      maxInstruments: cfg.BYBIT_MAX_INSTRUMENTS,
+      bookDepth: cfg.BYBIT_BOOK_DEPTH as 1 | 25 | 50 | 100 | 200,
+    },
+    okx: {
+      wsUrl: cfg.OKX_WS_URL,
+      restUrl: cfg.OKX_REST_URL,
+      demoTrading: cfg.OKX_DEMO_TRADING,
+      uly: cfg.OKX_ULY,
+      maxInstruments: cfg.OKX_MAX_INSTRUMENTS,
+    },
+    binance: {
+      marketWsUrl: cfg.BINANCE_MARKET_WS_URL,
+      publicWsUrl: cfg.BINANCE_PUBLIC_WS_URL,
+      restUrl: cfg.BINANCE_REST_URL,
+      underlyings: [...cfg.BINANCE_UNDERLYINGS],
+      maxInstruments: cfg.BINANCE_MAX_INSTRUMENTS,
+      bookDepth: cfg.BINANCE_BOOK_DEPTH as 10 | 20 | 50 | 100,
+    },
+  };
 }
 
 async function main(): Promise<void> {
@@ -80,7 +56,10 @@ async function main(): Promise<void> {
   const bus = new InMemoryEventBus();
   const clock = new LiveClock();
   const capture = new JsonlCaptureSink({ dir: cfg.CAPTURE_DIR });
-  const connectors = buildConnectors(cfg, { bus, clock, capture, logger });
+  const configs = venueConfigs(cfg);
+  const connectors = cfg.VENUES.map((v) =>
+    createVenueConnector(v, configs, { bus, clock, capture, logger }),
+  );
 
   const counters: Record<string, { book: number; trade: number; ticker: number }> = {};
   for (const v of cfg.VENUES) counters[v] = { book: 0, trade: 0, ticker: 0 };
@@ -89,16 +68,26 @@ async function main(): Promise<void> {
   bus.on('market.ticker', (e) => counters[e.venue]!.ticker++);
   bus.on('connector.status', (s) => logger.info('connector status', { ...s }));
 
+  const running: typeof connectors = [];
   for (const connector of connectors) {
-    const instruments = await connector.loadInstruments();
-    logger.info('instruments loaded', {
-      venue: connector.venue,
-      count: instruments.length,
-      sample: instruments.slice(0, 3).map((i) => i.venueSymbol),
-    });
-    await connector.connect();
-    await connector.subscribe(instruments);
+    try {
+      const instruments = await connector.loadInstruments();
+      logger.info('instruments loaded', {
+        venue: connector.venue,
+        count: instruments.length,
+        sample: instruments.slice(0, 3).map((i) => i.venueSymbol),
+      });
+      await connector.connect();
+      await connector.subscribe(instruments);
+      running.push(connector);
+    } catch (err) {
+      logger.error('venue startup failed, continuing without it', {
+        venue: connector.venue,
+        err: String(err),
+      });
+    }
   }
+  if (running.length === 0) throw new Error('no venue started — nothing to capture');
 
   const statsTimer = setInterval(() => {
     logger.info('market data stats', { ...counters });
@@ -108,7 +97,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal });
     clearInterval(statsTimer);
-    await Promise.all(connectors.map((c) => c.disconnect()));
+    await Promise.all(running.map((c) => c.disconnect()));
     await capture.close();
     process.exit(0);
   };

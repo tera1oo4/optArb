@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { z } from 'zod';
 import {
+  assertHttpOk,
   dec,
   emitAll,
   instrumentId,
@@ -96,7 +97,7 @@ export class DeribitConnector implements VenueConnector {
       `${this.config.restUrl}/public/get_instruments` +
       `?currency=${this.config.currency}&kind=option&expired=false`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`get_instruments failed: HTTP ${res.status}`);
+    await assertHttpOk(res, 'deribit get_instruments');
     const json: unknown = await res.json();
     const parsed = InstrumentsResponseSchema.parse(json);
 

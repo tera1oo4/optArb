@@ -29,3 +29,4 @@ export type { ConnectorDeps, VenueConnector } from './connector.js';
 export { L2Book } from './l2-book.js';
 export { BaseWsConnector } from './ws-connector.js';
 export type { WsConnectorOptions } from './ws-connector.js';
+export { assertHttpOk } from './http.js';

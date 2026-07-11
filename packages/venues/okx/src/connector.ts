@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  assertHttpOk,
   BaseWsConnector,
   dec,
   emitAll,
@@ -93,7 +94,7 @@ export class OkxConnector extends BaseWsConnector implements VenueConnector {
     const headers: Record<string, string> = { 'User-Agent': OKX_USER_AGENT };
     if (this.config.demoTrading) headers['x-simulated-trading'] = '1';
     const res = await fetch(url, { headers });
-    if (!res.ok) throw new Error(`okx instruments failed: HTTP ${res.status}`);
+    await assertHttpOk(res, 'okx instruments');
     const json: unknown = await res.json();
     const parsed = InstrumentsResponseSchema.parse(json);
     if (parsed.code !== '0') throw new Error(`okx instruments: code ${parsed.code}`);
@@ -115,8 +116,10 @@ export class OkxConnector extends BaseWsConnector implements VenueConnector {
         optionType: i.optType === 'C' ? 'call' : 'put',
         // Face value × multiplier = base-asset units per contract (0.01 BTC typical).
         contractMultiplier: dec(i.ctVal).mul(i.ctMult),
-        quoteCurrency: 'USD',
-        settleCurrency: 'BTC',
+        // OKX option premiums are quoted in coin per coin of underlying (like Deribit),
+        // e.g. bidPx 0.017 BTC for a BTC contract — NOT USD. Verified on prod 2026-07-11.
+        quoteCurrency: p.underlying,
+        settleCurrency: p.underlying,
       };
       this.ctx.instruments.set(i.instId, instrument);
       return instrument;
@@ -165,8 +168,11 @@ export class OkxConnector extends BaseWsConnector implements VenueConnector {
 
   private sendSubscribeAll(): void {
     const args: { channel: string; instId: string }[] = [];
+    // Index for the underlying feeds USD normalization of coin-quoted premiums.
+    args.push({ channel: 'index-tickers', instId: this.config.uly });
     for (const instId of this.subscribed.keys()) {
       args.push({ channel: 'tickers', instId });
+      args.push({ channel: 'mark-price', instId });
       args.push({ channel: 'books5', instId });
       args.push({ channel: 'trades', instId });
     }
