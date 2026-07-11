@@ -31,7 +31,7 @@ whenToUse: Когда пишется или отлаживается код ко
 - Лимиты: **≤32 WS-соединений/IP**, **≤16 сессий/API-ключ**; backpressure → сервер рвёт соединение (`connection_too_slow`)
 - Auth: `public/auth` (client_credentials); heartbeat: `public/set_heartbeat` + `public/test`
 - Каналы: `ticker.{instrument}.{100ms|raw}` (включает **греки и IV** для опционов), `book.{instrument}.{group}.{depth}.{interval}`, `trades.{instrument}.{interval}`, `markprice.options`, `deribit_price_index.{index}`, user: `user.orders.{instrument}.{interval}`, `user.changes.{instrument}.{interval}`
-- Книга: инкрементальная, контроль по `change_id`/`prev_change_id` — разрыв → resync
+- Книга: **interval-каналы (`.100ms`) шлют полный снапшот** `{timestamp, instrument_name, change_id, bids/asks: [[price, amount]]}` — без `type` и `prev_change_id`; **`.raw`-канал** — инкрементальный (`type: snapshot|change`, `prev_change_id`) с контролем по `change_id` — разрыв → resync
 - **КВАРК:** премии BTC-опционов котируются **в BTC** (ETH — в ETH), 1 контракт = 1 BTC; страйк в USD. Нормализация в USD обязательна через индекс
 - Инструменты: `public/get_instruments?currency=BTC&kind=option` — source of truth для спецификаций
 - Доки: https://docs.deribit.com/

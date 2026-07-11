@@ -53,7 +53,7 @@
 ## Следующие шаги
 
 1. ✅ Git: `origin` → https://github.com/tera1oo4/optArb.git (ветка `main`); push — только после ревью и diff-анализа (`/skill:release-review`)
-2. Scaffolding pnpm-workspaces по ADR-0004 (`packages/*`, `apps/*`)
-3. Коннектор Deribit (testnet) + capture → первый replay
+2. ✅ Scaffolding pnpm-workspaces: `packages/{core,persistence,venues/deribit}`, `apps/{collector,backtest}`; 22 теста, typecheck+prettier зелёные
+3. ✅ Коннектор Deribit (testnet): WS + heartbeat + reconnect + book resync + capture → replay через тот же pipeline (`pnpm dev:collector`, `pnpm backtest <file>`)
 4. Коннекторы Bybit/OKX/Binance → нормализация → первые cross-venue сигналы (paper)
 5. Polymarket connector (read-only) → digital-vs-vanilla детектор

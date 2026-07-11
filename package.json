@@ -1,0 +1,26 @@
+{
+  "name": "optarb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "dev:collector": "pnpm --filter @optarb/collector dev",
+    "backtest": "pnpm --filter @optarb/backtest start --",
+    "test": "vitest run",
+    "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
+    "lint": "pnpm typecheck && prettier --check \"**/*.{ts,json,yaml,yml}\"",
+    "format": "prettier --write \"**/*.{ts,json,yaml,yml}\"",
+    "build": "pnpm typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prettier": "^3.5.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}
