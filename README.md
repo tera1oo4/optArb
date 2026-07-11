@@ -1,0 +1,59 @@
+# optArb
+
+Система арбитража крипто-опционов между биржами **Deribit**, **Binance Options**, **Bybit**, **OKX** и бинарными контрактами **Polymarket** (моделируются как цифровые опционы). Активы v1: BTC, ETH. Стек: Node.js 22 + TypeScript, pnpm-монорепозиторий.
+
+**Статус:** стадия дизайна. Архитектурные решения — в [`docs/adr/`](docs/adr/README.md).
+
+## Документация
+
+| Документ | Содержание |
+|---|---|
+| [docs/adr/README.md](docs/adr/README.md) | Индекс и процесс ведения ADR |
+| [ADR-0001](docs/adr/0001-goals-and-scope.md) | Цели, границы, метрики |
+| [ADR-0002](docs/adr/0002-technology-stack.md) | Стек: Node.js + TypeScript |
+| [ADR-0003](docs/adr/0003-exchange-connectivity.md) | Нативные коннекторы к 5 площадкам |
+| [ADR-0004](docs/adr/0004-system-architecture.md) | Модульная архитектура, поток данных, replay |
+| [ADR-0005](docs/adr/0005-data-storage.md) | Redis + Postgres + JSONL-capture |
+| [ADR-0006](docs/adr/0006-risk-and-execution-safety.md) | Риск-менеджмент, kill switch, paper-first |
+
+## Идея в двух словах
+
+Ликвидность опционов фрагментирована: Deribit котирует премии в BTC, Binance — в USDT, Bybit — в USDC, OKX — в USD, а Polymarket продаёт бинарные контракты «BTC > X к дате D», которые оцениваются как цифровые опционы (`N(d2)` / репликация call-spread). После нормализации к USD-нотионалу между площадками систематически возникают расхождения — система собирает real-time данные, детектирует edge с учётом комиссий и leg-риска и исполняет двухногие сделки под жёсткими лимитами (paper-first).
+
+## Работа с kimi-code
+
+Проект настроен для AI-агента [kimi-code](https://moonshotai.github.io/kimi-code/):
+
+- **`AGENTS.md`** (корень) — главная инструкция агенту: стек, правила кодирования, безопасность, чек-лист. Загружается автоматически; действует иерархически (можно класть дополнительные `AGENTS.md` в подкаталоги)
+- **Скиллы проекта** — `.kimi-code/skills/` (project-scope, высший приоритет):
+
+  | Скилл | Вызов | Назначение |
+  |---|---|---|
+  | `exchange-connectors` | `/skill:exchange-connectors` | Эндпоинты, WS-каналы, heartbeat, auth, quirks всех 5 площадок |
+  | `trading-domain` | `/skill:trading-domain` | Опционы, греки, IV, parity, цифровики, типы арбитража |
+  | `adr` | `/skill:adr <название>` | Процесс ведения ADR |
+  | `release-review` | `/skill:release-review` | Ревью кода + diff-анализ + push в GitHub только после одобрения |
+
+  Агент может вызывать их и сам (по `whenToUse`), не только через slash-команду.
+
+### Что kimi-code поддерживает / не поддерживает
+
+- **Суб-агенты**: только встроенные `explore` (read-only исследование), `plan` (планирование), `coder` (реализация) — главный агент диспетчеризует их автоматически. Пользовательских суб-агентов создавать нельзя → расширение поведения делается **скиллами**
+- **Скиллы**: 4 уровня приоритета Project (`.kimi-code/skills/`, `.agents/skills/`) > User (`~/.kimi-code/skills/`, `~/.agents/skills/`) > Extra (`extra_skill_dirs` в `~/.kimi-code/config.toml`) > Built-in. Формат — `SKILL.md` с YAML-frontmatter (`name`, `description`, `whenToUse`, `type: prompt|flow`, `arguments`)
+- **Локальный конфиг проекта**: `.kimi-code/local.toml` (создаётся CLI, в `.gitignore`)
+- **Внешние скиллы**: для Polymarket есть готовый community-скилл LobeHub `web3-polymarket` (auth, ордера, CTF, bridge) — при желании установить в `~/.kimi-code/skills/`
+- **Прочее**: поддерживаются MCP-серверы, hooks и plugins (`plugin.json`) — пока не используются
+
+## Безопасность
+
+- Paper-режим по умолчанию; live — только `LIVE_TRADING=true` + подтверждение оператора (ADR-0006)
+- Секреты только через env; в репозитории — `.env.example`
+- Все ордера проходят pre-trade риск-проверки; kill switch глобальный и по-площадочный
+
+## Следующие шаги
+
+1. ✅ Git: `origin` → https://github.com/tera1oo4/optArb.git (ветка `main`); push — только после ревью и diff-анализа (`/skill:release-review`)
+2. Scaffolding pnpm-workspaces по ADR-0004 (`packages/*`, `apps/*`)
+3. Коннектор Deribit (testnet) + capture → первый replay
+4. Коннекторы Bybit/OKX/Binance → нормализация → первые cross-venue сигналы (paper)
+5. Polymarket connector (read-only) → digital-vs-vanilla детектор
