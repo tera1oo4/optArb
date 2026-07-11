@@ -5,5 +5,5 @@ export {
   contractsToCoin,
   coinToUsd,
 } from './normalize.js';
-export { MarketDataStore } from './store.js';
+export { MarketDataStore, isBinaryViewKey } from './store.js';
 export type { VenueQuote, InstrumentView } from './store.js';

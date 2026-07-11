@@ -13,6 +13,7 @@
     "@optarb/venue-bybit": "workspace:*",
     "@optarb/venue-okx": "workspace:*",
     "@optarb/venue-binance": "workspace:*",
+    "@optarb/venue-polymarket": "workspace:*",
     "pino": "^9.6.0"
   },
   "devDependencies": {

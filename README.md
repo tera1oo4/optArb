@@ -57,6 +57,13 @@
 3. ✅ Коннектор Deribit (testnet): WS + heartbeat + reconnect + book resync + capture → replay через тот же pipeline (`pnpm dev:collector`, `pnpm backtest <file>`)
 4. ✅ Коннекторы Bybit (testnet), OKX (demo), Binance (prod read-only): общий `BaseWsConnector` + `L2Book` в core; multi-venue collector (`VENUES=...`) и multi-venue replay; 53 теста; smoke: все 4 биржи live, 0 gaps на replay
 5. ✅ `packages/marketdata` (USD-нормализация, consolidated view) + `packages/signals` (cross-venue детектор) + `apps/trader` paper: live-проверено — сигналы Deribit-testnet × OKX-prod; 64 теста
-6. Polymarket connector (read-only) → `packages/pricing` (Black-76) → digital-vs-vanilla детектор
+6. ✅ Polymarket connector (read-only) + `packages/pricing` (Black-76, digital) + детекторы digital-vs-vanilla и YES/NO-parity в `packages/signals`
+
+### Polymarket → каноническая модель (M3)
+
+- Бинарный рынок «Will BTC be above $K on date D?» → **два инструмента** `kind: 'binary'`: YES-токен = цифровой **call**, NO-токен = цифровой **put** на один strike (underlying из вопроса, expiry из Gamma `endDate`, strike — regex из текста вопроса); пара связана общими canonical-частями, `conditionId` лежит в `Instrument.metadata`
+- Цены 0–1 USDC за share (payoff $1); binary-инструменты живут в отдельном key-неймспейсе `binary:` consolidated view — их цены никогда не смешиваются с премиями vanilla-опционов в cross-venue детекторе
+- Touch-рынки («reach $X», «dip to $X») и up/down — **не** expiry-диджиталы: регистрируются со `strike: null` + `metadata.parseable: 'false'`, view не создаётся, pricing/детекторы их пропускают
+- CLOB market WS: subscribe `{"assets_ids":[...],"type":"market"}`, heartbeat клиентский `{}` каждые 10с; sequence нет — snapshot replace + level-дельты
 
 > Известное ограничение окружения: Bybit/Binance блокируют US-egress (403/451); OKX demo-книги пустые — для сигналов OKX используется prod read-only

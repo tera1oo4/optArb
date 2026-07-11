@@ -27,6 +27,13 @@ export interface Instrument {
   /** Currency the price is quoted in (BTC on Deribit, USDT on Binance, ...) */
   quoteCurrency: QuoteCurrency;
   settleCurrency: QuoteCurrency;
+  /**
+   * Venue-specific extras not covered by the canonical model.
+   * Polymarket uses this for `conditionId`, `question`, `outcome` and a
+   * `parseable` flag (markets whose strike could not be derived from the
+   * question are still registered with `parseable: 'false'`).
+   */
+  metadata?: Record<string, string>;
 }
 
 export function instrumentId(venue: Venue, venueSymbol: string): string {

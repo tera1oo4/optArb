@@ -12,6 +12,7 @@ import * as deribit from '@optarb/venue-deribit';
 import * as bybit from '@optarb/venue-bybit';
 import * as okx from '@optarb/venue-okx';
 import * as binance from '@optarb/venue-binance';
+import * as polymarket from '@optarb/venue-polymarket';
 
 /**
  * Replay engine v0 (ADR-0004): feeds a JSONL capture through the SAME
@@ -28,6 +29,7 @@ function makeVenueReplays(nowMs: () => number): Partial<Record<Venue, VenueRepla
   const bctx = bybit.createMarketContext({ nowMs });
   const octx = okx.createMarketContext({ nowMs });
   const bnctx = binance.createMarketContext({ nowMs });
+  const pctx = polymarket.createMarketContext({ nowMs });
   return {
     deribit: {
       handle: (raw) => deribit.handleRawMessage(raw, dctx),
@@ -59,6 +61,10 @@ function makeVenueReplays(nowMs: () => number): Partial<Record<Venue, VenueRepla
         return true;
       },
     },
+    polymarket: {
+      handle: (raw) => polymarket.handleRawMessage(raw, pctx),
+      onGap: () => false,
+    },
   };
 }
 
@@ -74,7 +80,7 @@ async function main(): Promise<void> {
   const clock = new VirtualClock();
 
   const counters: Record<string, { book: number; trade: number; ticker: number }> = {};
-  for (const v of ['deribit', 'bybit', 'okx', 'binance'])
+  for (const v of ['deribit', 'bybit', 'okx', 'binance', 'polymarket'])
     counters[v] = { book: 0, trade: 0, ticker: 0 };
   bus.on('market.book', (e) => counters[e.venue]!.book++);
   bus.on('market.trade', (e) => counters[e.venue]!.trade++);

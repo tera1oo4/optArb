@@ -25,10 +25,11 @@ packages/venues/deribit   — Deribit WS (testnet/prod)
 packages/venues/bybit     — Bybit V5 option WS (testnet/prod)
 packages/venues/okx       — OKX V5 option WS (demo/prod; REST требует browser User-Agent)
 packages/venues/binance   — Binance options: fstream (markPrice + diff depth + trades, prod read-only)
-packages/marketdata       — USD-нормализация (coin-quoted × index), consolidated view (canonical key)
-packages/signals          — cross-venue детектор (freshness + spread bps + executable size)
+packages/venues/polymarket — Polymarket CLOB (read-only): Gamma REST discovery + market WS; YES=digital call, NO=digital put
+packages/marketdata       — USD-нормализация (coin-quoted × index), consolidated view (canonical key; binary-инструменты в неймспейсе `binary:`)
+packages/signals          — cross-venue детектор + digital-vs-vanilla + YES/NO-parity (freshness + spread bps + executable size)
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
-packages/pricing          — (M3) Black-76, вероятности для digital-контрактов
+packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
 apps/backtest             — replay capture-файлов (multi-venue)
 apps/trader               — paper-режим: consolidated view + cross-venue сигналы (ордеров НЕТ)
@@ -42,7 +43,7 @@ pnpm build              # typecheck всех пакетов
 pnpm test               # vitest (unit)
 pnpm lint               # tsc --noEmit + prettier --check
 pnpm format             # prettier --write
-pnpm dev:collector      # сбор рыночных данных + capture (env: VENUES=deribit,bybit,okx,binance)
+pnpm dev:collector      # сбор рыночных данных + capture (env: VENUES=deribit,bybit,okx,binance,polymarket)
 pnpm dev:trader         # paper-режим: consolidated view + cross-venue сигналы
 pnpm backtest <file>    # replay capture-файла
 ```
@@ -54,6 +55,7 @@ pnpm backtest <file>    # replay capture-файла
 - OKX: demo по умолчанию (`x-simulated-trading: 1`, wspap), но **demo-книги мёртвые** (нет двусторонних котировок) — для сигналов нужен prod read-only (`OKX_DEMO_TRADING=false`, `OKX_WS_URL=wss://ws.okx.com:8443/ws/v5/public`); REST требует browser User-Agent (Cloudflare 403); heartbeat — сырой текст `ping`/`pong`; books5 — полный top-5 каждый пуш; multiplier = ctVal×ctMult (0.01 BTC); **премии котируются в coin** (bidPx 0.017 = BTC, не USD!); `tickers` = только bid/ask/last; index — канал `index-tickers`, markPx — канал `mark-price`; IV/греки недоступны на public WS (opt-summary REST-only) → markIv/greeks = null; demo-инструменты фильтруются по `instFamily === uly`
 - **Гео-блоки**: Bybit (CloudFront 403 «block access from your country») и Binance (HTTP 451) блокируют US-egress; Deribit testnet и OKX prod доступны. REST-ошибки включают тело ответа (`assertHttpOk` в core) — гео-блок виден сразу
 - Binance: testnet для опционов **не существует** — только prod public read-only; старый `nbstream/eoptions` снят (404), стримы на `fstream.binance.com`: markPrice на `/market/stream`, depth/trades на `/public/stream`; символы в stream-именах **lowercase**; depth — futures-style diff (pu-цепочка), REST `/eapi/v1/depth` отстаёт → rebase-модель (replace + новая цепочка); один `{uly}usdt@optionMarkPrice` покрывает тикеры+греки всего рынка
+- Polymarket: testnet **не существует** — prod mainnet public read-only; discovery через Gamma REST (`/markets`, pagination limit+offset; `outcomes`/`clobTokenIds` — JSON-строки); WS `wss://ws-subscriptions-clob.polymarket.com/ws/market`, subscribe `{"assets_ids":[...],"type":"market","custom_feature_enabled":true}`, **heartbeat клиентский `{}` каждые 10с** (без него отключение ~30с); сообщения могут приходить массивом событий; sequence **нет** (`hash` — dedup-маркер) → snapshot replace + level-дельты (size "0" = удаление); цены 0–1 USDC за share (payoff $1); YES-токен = digital call, NO = digital put (canonical parts одинаковые, `conditionId` в metadata); парсинг вопросов намеренно поверхностный — strike только у "above $X", touch-рынки (reach/dip) → `parseable: 'false'` + strike null
 
 ## Правила кодирования
 

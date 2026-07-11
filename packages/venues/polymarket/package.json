@@ -1,5 +1,5 @@
 {
-  "name": "@optarb/venues",
+  "name": "@optarb/venue-polymarket",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,11 +8,7 @@
   },
   "dependencies": {
     "@optarb/core": "workspace:*",
-    "@optarb/venue-deribit": "workspace:*",
-    "@optarb/venue-bybit": "workspace:*",
-    "@optarb/venue-okx": "workspace:*",
-    "@optarb/venue-binance": "workspace:*",
-    "@optarb/venue-polymarket": "workspace:*"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

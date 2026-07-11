@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-const VenueEnum = z.enum(['deribit', 'bybit', 'okx', 'binance']);
+const VenueEnum = z.enum(['deribit', 'bybit', 'okx', 'binance', 'polymarket']);
 
 const EnvSchema = z.object({
-  /** Comma-separated venues to run, e.g. "deribit,bybit,okx,binance" */
+  /** Comma-separated venues to run, e.g. "deribit,bybit,okx,binance,polymarket" */
   VENUES: z
     .string()
     .default('deribit')
@@ -42,6 +42,20 @@ const EnvSchema = z.object({
     .pipe(z.array(z.enum(['BTC', 'ETH'])).min(1)),
   BINANCE_MAX_INSTRUMENTS: z.coerce.number().int().positive().default(40),
   BINANCE_BOOK_DEPTH: z.coerce.number().int().positive().default(10),
+
+  // Polymarket: no testnet exists — public mainnet read-only only.
+  POLYMARKET_GAMMA_URL: z.string().url().default('https://gamma-api.polymarket.com'),
+  POLYMARKET_WS_URL: z
+    .string()
+    .url()
+    .default('wss://ws-subscriptions-clob.polymarket.com/ws/market'),
+  POLYMARKET_UNDERLYINGS: z
+    .string()
+    .default('BTC')
+    .transform((s) => s.split(',').map((v) => v.trim()))
+    .pipe(z.array(z.enum(['BTC', 'ETH'])).min(1)),
+  POLYMARKET_MAX_MARKETS: z.coerce.number().int().positive().default(20),
+  POLYMARKET_BOOK_DEPTH: z.coerce.number().int().positive().default(10),
 
   CAPTURE_DIR: z.string().default('./data/capture'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

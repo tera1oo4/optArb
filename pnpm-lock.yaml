@@ -44,6 +44,9 @@ importers:
       '@optarb/venue-okx':
         specifier: workspace:*
         version: link:../../packages/venues/okx
+      '@optarb/venue-polymarket':
+        specifier: workspace:*
+        version: link:../../packages/venues/polymarket
       pino:
         specifier: ^9.6.0
         version: 9.14.0
@@ -171,6 +174,19 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/pricing:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/signals:
     dependencies:
       '@optarb/core':
@@ -179,6 +195,9 @@ importers:
       '@optarb/marketdata':
         specifier: workspace:*
         version: link:../marketdata
+      '@optarb/pricing':
+        specifier: workspace:*
+        version: link:../pricing
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -204,6 +223,9 @@ importers:
       '@optarb/venue-okx':
         specifier: workspace:*
         version: link:../okx
+      '@optarb/venue-polymarket':
+        specifier: workspace:*
+        version: link:../polymarket
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -267,6 +289,22 @@ importers:
         version: 5.9.3
 
   packages/venues/okx:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../../core
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/venues/polymarket:
     dependencies:
       '@optarb/core':
         specifier: workspace:*

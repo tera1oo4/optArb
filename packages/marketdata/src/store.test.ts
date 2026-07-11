@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { dec, instrumentId, type Instrument } from '@optarb/core';
 import { canonicalKey, priceToUsd } from './normalize.js';
-import { MarketDataStore } from './store.js';
+import { MarketDataStore, isBinaryViewKey } from './store.js';
 
 function makeInst(venue: 'deribit' | 'okx' | 'bybit' | 'binance', symbol: string): Instrument {
   const specs = {
@@ -130,6 +130,58 @@ describe('MarketDataStore', () => {
     q = store.getView('BTC:1783843200000:63000:call')!.quotes.get('deribit')!;
     expect(q.bidUsd?.toString()).toBe('1216');
     expect(q.bidSizeCoin?.toString()).toBe('3');
+  });
+
+  it('keeps binary (Polymarket) instruments in a separate key namespace', () => {
+    const store = new MarketDataStore();
+    const expiryMs = Date.UTC(2026, 6, 12, 16, 0, 0, 0);
+    const yes: Instrument = {
+      id: instrumentId('polymarket', 'token-yes'),
+      venue: 'polymarket',
+      venueSymbol: 'token-yes',
+      kind: 'binary',
+      underlying: 'BTC',
+      expiryMs,
+      strike: dec('63000'),
+      optionType: 'call',
+      contractMultiplier: dec(1),
+      quoteCurrency: 'USDC',
+      settleCurrency: 'USDC',
+      metadata: { conditionId: '0xabc', outcome: 'Yes', parseable: 'true' },
+    };
+    const vanilla = makeInst('deribit', 'BTC-12JUL26-63000-C');
+    vanilla.expiryMs = expiryMs;
+    store.registerInstrument(yes);
+    store.registerInstrument(vanilla);
+
+    store.applyBook({
+      venue: 'polymarket',
+      instrumentId: yes.id,
+      tsMs: 500,
+      recvMs: 500,
+      sequence: null,
+      bids: [{ price: dec('0.61'), size: dec('300') }],
+      asks: [{ price: dec('0.63'), size: dec('150') }],
+      quoteCurrency: 'USDC',
+    });
+
+    const views = store.views();
+    expect(views).toHaveLength(2); // binary view does NOT merge with the vanilla view
+    const bin = views.find((v) => isBinaryViewKey(v.key))!;
+    expect(bin.key).toBe(`binary:BTC:${expiryMs}:63000:call`);
+    const pq = bin.quotes.get('polymarket')!;
+    expect(pq.bidUsd?.toString()).toBe('0.61'); // USDC at par
+    expect(pq.bidSizeCoin?.toString()).toBe('300'); // shares × multiplier 1
+
+    // Unparseable markets (null strike) are registered but get no view.
+    const unparseable: Instrument = {
+      ...yes,
+      id: instrumentId('polymarket', 'token-x'),
+      venueSymbol: 'token-x',
+      strike: null,
+    };
+    store.registerInstrument(unparseable);
+    expect(store.views()).toHaveLength(2);
   });
 
   it('ignores events for unregistered instruments', () => {

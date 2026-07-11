@@ -45,6 +45,13 @@ export function venueConfigs(cfg: CollectorConfig): VenueRuntimeConfigs {
       maxInstruments: cfg.BINANCE_MAX_INSTRUMENTS,
       bookDepth: cfg.BINANCE_BOOK_DEPTH as 10 | 20 | 50 | 100,
     },
+    polymarket: {
+      gammaUrl: cfg.POLYMARKET_GAMMA_URL,
+      wsUrl: cfg.POLYMARKET_WS_URL,
+      underlyings: [...cfg.POLYMARKET_UNDERLYINGS],
+      maxMarkets: cfg.POLYMARKET_MAX_MARKETS,
+      bookDepth: cfg.POLYMARKET_BOOK_DEPTH,
+    },
   };
 }
 

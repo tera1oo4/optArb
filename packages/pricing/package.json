@@ -1,5 +1,5 @@
 {
-  "name": "@optarb/signals",
+  "name": "@optarb/pricing",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,9 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@optarb/core": "workspace:*",
-    "@optarb/marketdata": "workspace:*",
-    "@optarb/pricing": "workspace:*"
+    "@optarb/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
