@@ -1,7 +1,13 @@
 import 'dotenv/config';
 import pino from 'pino';
-import { InMemoryEventBus, LiveClock, type Logger } from '@optarb/core';
-import { JsonlCaptureSink } from '@optarb/persistence';
+import {
+  InMemoryEventBus,
+  LiveClock,
+  type ConnectorStatus,
+  type Logger,
+  type Venue,
+} from '@optarb/core';
+import { createRedisStateStore, JsonlCaptureSink } from '@optarb/persistence';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import { loadConfig, type CollectorConfig } from './config.js';
 
@@ -63,6 +69,7 @@ async function main(): Promise<void> {
   const bus = new InMemoryEventBus();
   const clock = new LiveClock();
   const capture = new JsonlCaptureSink({ dir: cfg.CAPTURE_DIR });
+  const redisStore = createRedisStateStore({ REDIS_URL: cfg.REDIS_URL }, logger);
   const configs = venueConfigs(cfg);
   const connectors = cfg.VENUES.map((v) =>
     createVenueConnector(v, configs, { bus, clock, capture, logger }),
@@ -70,15 +77,21 @@ async function main(): Promise<void> {
 
   const counters: Record<string, { book: number; trade: number; ticker: number }> = {};
   for (const v of cfg.VENUES) counters[v] = { book: 0, trade: 0, ticker: 0 };
+  const statuses = new Map<Venue, ConnectorStatus>();
+  const instrumentCounts = new Map<Venue, number>();
   bus.on('market.book', (e) => counters[e.venue]!.book++);
   bus.on('market.trade', (e) => counters[e.venue]!.trade++);
   bus.on('market.ticker', (e) => counters[e.venue]!.ticker++);
-  bus.on('connector.status', (s) => logger.info('connector status', { ...s }));
+  bus.on('connector.status', (s) => {
+    statuses.set(s.venue, s);
+    logger.info('connector status', { ...s });
+  });
 
   const running: typeof connectors = [];
   for (const connector of connectors) {
     try {
       const instruments = await connector.loadInstruments();
+      instrumentCounts.set(connector.venue, instruments.length);
       logger.info('instruments loaded', {
         venue: connector.venue,
         count: instruments.length,
@@ -97,8 +110,22 @@ async function main(): Promise<void> {
   if (running.length === 0) throw new Error('no venue started — nothing to capture');
 
   const statsTimer = setInterval(() => {
+    const nowMs = clock.nowMs();
     logger.info('market data stats', { ...counters });
     for (const v of cfg.VENUES) counters[v] = { book: 0, trade: 0, ticker: 0 };
+
+    for (const venue of cfg.VENUES) {
+      const status = statuses.get(venue);
+      if (!status) continue;
+      void redisStore
+        .publishVenueStatus(venue, {
+          venue,
+          state: status.state,
+          instrumentCount: instrumentCounts.get(venue) ?? 0,
+          tsMs: nowMs,
+        })
+        .catch(() => {});
+    }
   }, cfg.STATS_INTERVAL_MS);
 
   const shutdown = async (signal: string) => {
@@ -106,6 +133,7 @@ async function main(): Promise<void> {
     clearInterval(statsTimer);
     await Promise.all(running.map((c) => c.disconnect()));
     await capture.close();
+    await redisStore.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

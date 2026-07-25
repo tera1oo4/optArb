@@ -106,6 +106,12 @@ const EnvSchema = z
 
     /** Optional Postgres audit persistence (ADR-0005). If unset, trader runs without audit. */
     PERSIST_POSTGRES_URL: z.string().url().optional(),
+
+    /** Optional Redis hot-state publisher (ADR-0005). If unset, hot state is not published. */
+    REDIS_URL: z.string().url().optional(),
+
+    /** Redis key for the global kill switch; default is `optarb:kill:switch`. */
+    RISK_KILL_SWITCH_REDIS_KEY: z.string().default('optarb:kill:switch'),
   })
   .merge(RiskConfigSchema);
 

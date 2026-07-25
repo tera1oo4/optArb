@@ -17,3 +17,16 @@ export type {
   AuditRiskDecisionInput,
   AuditWriter,
 } from './audit.js';
+export {
+  createRedisStateStore,
+  IoRedisStateStore,
+  NoOpRedisStateStore,
+} from './redis-state-store.js';
+export type {
+  BookSnapshot,
+  MetricsSnapshot,
+  RedisPortfolioSnapshot,
+  RedisStateStore,
+  RedisStateStoreOptions,
+  VenueStatusSnapshot,
+} from './redis-state-store.js';

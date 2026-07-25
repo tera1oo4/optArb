@@ -35,6 +35,8 @@ export function riskStateFromSnapshot(
   };
 }
 
+export type KillSwitchProvider = () => boolean | Promise<boolean>;
+
 /**
  * Pre-trade risk engine (ADR-0006). Stateless: all current exposure is passed
  * in via RiskState on every check, so the engine is trivially replayable.
@@ -43,13 +45,14 @@ export class RiskEngine {
   constructor(
     private readonly config: RiskConfig,
     private readonly fees: FeeSchedules,
+    private readonly killSwitch?: KillSwitchProvider,
   ) {}
 
-  check(intent: ExecutionIntent, state: RiskState, nowMs: number): RiskCheckResult {
+  async check(intent: ExecutionIntent, state: RiskState, nowMs: number): Promise<RiskCheckResult> {
     const reasons: string[] = [];
 
-    if (this.config.RISK_KILL_SWITCH) {
-      return { allowed: false, reasons: ['kill-switch active'] };
+    if (await this.isKillSwitchActive()) {
+      return { allowed: false, reasons: ['kill-switch'] };
     }
 
     const perVenueDelta = new Map<Venue, Decimal>();
@@ -126,6 +129,14 @@ export class RiskEngine {
     }
 
     return reasons.length === 0 ? { allowed: true, reasons: [] } : { allowed: false, reasons };
+  }
+
+  private async isKillSwitchActive(): Promise<boolean> {
+    if (this.killSwitch) {
+      const result = this.killSwitch();
+      return await result;
+    }
+    return this.config.RISK_KILL_SWITCH;
   }
 
   private exposure(buckets: RiskExposure[], key: string): Decimal {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { dec, type Side, type Underlying, type Venue } from '@optarb/core';
 import { DEFAULT_FEE_SCHEDULES, type ExecutionIntent, type ExecutionLeg } from '@optarb/execution';
 import type { RiskConfig } from './config.js';
-import { RiskEngine, riskStateFromSnapshot } from './engine.js';
+import { RiskEngine, riskStateFromSnapshot, type KillSwitchProvider } from './engine.js';
 import type { RiskState } from './types.js';
 
 const BASE_CONFIG: RiskConfig = {
@@ -81,56 +81,80 @@ function stateWith(args: {
 }
 
 describe('RiskEngine', () => {
-  it('allows a valid cross-venue intent', () => {
+  it('allows a valid cross-venue intent', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const intent = makeIntent([
       leg('okx', 'buy', '1000', '1'),
       leg('deribit', 'sell', '1100', '1'),
     ]);
-    const result = engine.check(intent, emptyState(), 1_500);
+    const result = await engine.check(intent, emptyState(), 1_500);
     expect(result.allowed).toBe(true);
     expect(result.reasons).toHaveLength(0);
   });
 
-  it('denies when the kill switch is active', () => {
+  it('denies when the kill switch is active', async () => {
     const engine = new RiskEngine(
       { ...BASE_CONFIG, RISK_KILL_SWITCH: true },
       DEFAULT_FEE_SCHEDULES,
     );
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
       emptyState(),
       1_500,
     );
     expect(result.allowed).toBe(false);
-    expect(result.reasons).toContain('kill-switch active');
+    expect(result.reasons).toContain('kill-switch');
   });
 
-  it('denies stale per-leg quotes', () => {
+  it('denies when the kill switch callback returns true', async () => {
+    const killSwitch: KillSwitchProvider = () => true;
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES, killSwitch);
+    const result = await engine.check(
+      makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain('kill-switch');
+  });
+
+  it('denies when the kill switch callback returns a resolving true', async () => {
+    const killSwitch: KillSwitchProvider = () => Promise.resolve(true);
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES, killSwitch);
+    const result = await engine.check(
+      makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain('kill-switch');
+  });
+
+  it('denies stale per-leg quotes', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const intent = makeIntent([
       leg('okx', 'buy', '1000', '1', { quoteRecvMs: 0 }),
       leg('deribit', 'sell', '1100', '1', { quoteRecvMs: 0 }),
     ]);
-    const result = engine.check(intent, emptyState(), 3_000);
+    const result = await engine.check(intent, emptyState(), 3_000);
     expect(result.allowed).toBe(false);
     expect(result.reasons.some((r) => r.includes('stale quote'))).toBe(true);
   });
 
-  it('falls back to intent.tsMs when per-leg quoteRecvMs is absent', () => {
+  it('falls back to intent.tsMs when per-leg quoteRecvMs is absent', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const intent = makeIntent(
       [leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')],
       'cross-venue',
       500,
     );
-    expect(engine.check(intent, emptyState(), 2_499).allowed).toBe(true);
-    expect(engine.check(intent, emptyState(), 2_501).allowed).toBe(false);
+    expect((await engine.check(intent, emptyState(), 2_499)).allowed).toBe(true);
+    expect((await engine.check(intent, emptyState(), 2_501)).allowed).toBe(false);
   });
 
-  it('denies non-positive price', () => {
+  it('denies non-positive price', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '0', '1'), leg('deribit', 'sell', '1100', '1')]),
       emptyState(),
       1_500,
@@ -139,9 +163,9 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('non-positive price'))).toBe(true);
   });
 
-  it('denies non-positive size', () => {
+  it('denies non-positive size', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '1000', '-1'), leg('deribit', 'sell', '1100', '1')]),
       emptyState(),
       1_500,
@@ -150,12 +174,12 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('non-positive size'))).toBe(true);
   });
 
-  it('denies when a leg exceeds the per-trade notional limit', () => {
+  it('denies when a leg exceeds the per-trade notional limit', async () => {
     const engine = new RiskEngine(
       { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: 1_000 },
       DEFAULT_FEE_SCHEDULES,
     );
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '2000', '1'), leg('deribit', 'sell', '2100', '1')]),
       emptyState(),
       1_500,
@@ -164,10 +188,10 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('per-trade notional'))).toBe(true);
   });
 
-  it('denies when a venue notional limit is breached', () => {
+  it('denies when a venue notional limit is breached', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const state = stateWith({ perVenue: [{ key: 'okx', notionalUsd: '49000' }] });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '2000', '1'), leg('deribit', 'sell', '2100', '1')]),
       state,
       1_500,
@@ -176,12 +200,12 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('venue okx notional'))).toBe(true);
   });
 
-  it('denies when the global notional limit is breached', () => {
+  it('denies when the global notional limit is breached', async () => {
     const engine = new RiskEngine(
       { ...BASE_CONFIG, RISK_MAX_NOTIONAL_GLOBAL_USD: 5_000 },
       DEFAULT_FEE_SCHEDULES,
     );
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '3000', '1'), leg('deribit', 'sell', '3100', '1')]),
       emptyState(),
       1_500,
@@ -190,10 +214,10 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('global notional'))).toBe(true);
   });
 
-  it('denies when the per-underlying exposure limit is breached', () => {
+  it('denies when the per-underlying exposure limit is breached', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const state = stateWith({ perUnderlying: [{ key: 'BTC', notionalUsd: '99000' }] });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '2000', '1'), leg('deribit', 'sell', '2100', '1')]),
       state,
       1_500,
@@ -202,10 +226,10 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('underlying BTC exposure'))).toBe(true);
   });
 
-  it('denies when the daily realized loss exceeds the limit', () => {
+  it('denies when the daily realized loss exceeds the limit', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const state = stateWith({ dailyRealizedPnlUsd: '-6000' });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
       state,
       1_500,
@@ -214,10 +238,10 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('daily realized loss'))).toBe(true);
   });
 
-  it('does not deny on daily realized profit', () => {
+  it('does not deny on daily realized profit', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const state = stateWith({ dailyRealizedPnlUsd: '6000' });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
       state,
       1_500,
@@ -225,11 +249,11 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('allows cross-venue intents with sufficient edge after fees', () => {
+  it('allows cross-venue intents with sufficient edge after fees', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     // Binary: buy YES at 0.48, sell YES at 0.52 on Polymarket-like tight spread.
     // Gross = 40, fees ~ 35, net ~ 5 on 480 buy notional => ~104 bps > 5 bps.
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([
         leg('polymarket', 'buy', '0.48', '1000', { indexUsd: null }),
         leg('polymarket', 'sell', '0.52', '1000', { indexUsd: null }),
@@ -240,10 +264,10 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('denies cross-venue intents when fees eat the edge', () => {
+  it('denies cross-venue intents when fees eat the edge', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     // Binary: 10 bps gross edge is smaller than taker fees.
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([
         leg('polymarket', 'buy', '0.495', '1000', { indexUsd: null }),
         leg('polymarket', 'sell', '0.500', '1000', { indexUsd: null }),
@@ -255,9 +279,9 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
   });
 
-  it('skips edge-after-fees for non-cross-venue intents', () => {
+  it('skips edge-after-fees for non-cross-venue intents', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent(
         [leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1001', '1')],
         'digital-vs-vanilla',
@@ -268,12 +292,12 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('skips edge-after-fees when fee schedules are missing for a leg venue', () => {
+  it('skips edge-after-fees when fee schedules are missing for a leg venue', async () => {
     const engine = new RiskEngine(BASE_CONFIG, {
       ...DEFAULT_FEE_SCHEDULES,
       okx: undefined as never,
     });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]),
       emptyState(),
       1_500,
@@ -281,9 +305,9 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('skips edge-after-fees when the two legs do not share a view', () => {
+  it('skips edge-after-fees when the two legs do not share a view', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([
         leg('okx', 'buy', '1000', '1', { viewKey: 'BTC:12345:50000:call' }),
         leg('deribit', 'sell', '1100', '1', { viewKey: 'BTC:12345:50000:put' }),
@@ -294,7 +318,7 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('returns multiple reasons when several limits are breached', () => {
+  it('returns multiple reasons when several limits are breached', async () => {
     const engine = new RiskEngine(
       { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: 500 },
       DEFAULT_FEE_SCHEDULES,
@@ -303,7 +327,7 @@ describe('RiskEngine', () => {
       perVenue: [{ key: 'okx', notionalUsd: '60000' }],
       dailyRealizedPnlUsd: '-7000',
     });
-    const result = engine.check(
+    const result = await engine.check(
       makeIntent([
         leg('okx', 'buy', '1000', '1', { quoteRecvMs: 0 }),
         leg('deribit', 'sell', '1100', '1', { quoteRecvMs: 0 }),

@@ -70,7 +70,7 @@ export class BacktestEngine {
     // state of each capture-time instant.
     const pendingBucket: RawCapture[] = [];
 
-    const flushBucket = (bucketTsMs: number): void => {
+    const flushBucket = async (bucketTsMs: number): Promise<void> => {
       clock.set(bucketTsMs);
       for (const entry of pendingBucket) {
         const replay = replays[entry.venue];
@@ -103,7 +103,7 @@ export class BacktestEngine {
       pendingBucket.length = 0;
 
       if (bucketTsMs - lastScanMs >= scanIntervalMs) {
-        this.scan(
+        await this.scan(
           store,
           detector,
           riskEngine,
@@ -129,19 +129,19 @@ export class BacktestEngine {
       lastTsMs = entry.tsMs;
 
       if (pendingBucket.length > 0 && pendingBucket[0]!.tsMs !== entry.tsMs) {
-        flushBucket(pendingBucket[0]!.tsMs);
+        await flushBucket(pendingBucket[0]!.tsMs);
       }
       pendingBucket.push(entry);
     }
 
     if (pendingBucket.length > 0) {
-      flushBucket(pendingBucket[0]!.tsMs);
+      await flushBucket(pendingBucket[0]!.tsMs);
     }
 
     // Final scan at the end of the capture to catch any state that formed
     // after the last scheduled scan interval.
     if (lastTsMs > lastScanMs) {
-      this.scan(
+      await this.scan(
         store,
         detector,
         riskEngine,
@@ -186,7 +186,7 @@ export class BacktestEngine {
     }
   }
 
-  private scan(
+  private async scan(
     store: MarketDataStore,
     detector: CrossVenueDetector,
     riskEngine: RiskEngine,
@@ -196,7 +196,7 @@ export class BacktestEngine {
     addSignals: (n: number) => void,
     addRejects: (n: number) => void,
     addFills: (n: number) => void,
-  ): void {
+  ): Promise<void> {
     const views = store.views();
     const signals = detector.detect(views, nowMs);
     addSignals(signals.length);
@@ -212,7 +212,7 @@ export class BacktestEngine {
 
       const snapshot = executor.portfolio.snapshot(views);
       const riskState = riskStateFromSnapshot(snapshot, snapshot.realizedPnlUsd);
-      const riskResult = riskEngine.check(intent, riskState, nowMs);
+      const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {
         addRejects(1);
         this.log.debug('backtest: risk check denied intent', {

@@ -15,14 +15,23 @@ import {
   type ExecutionIntent,
   type ExecutionOutcome,
   type PaperFill,
+  type PortfolioSnapshot,
 } from '@optarb/execution';
-import { MarketDataStore, type InstrumentView } from '@optarb/marketdata';
+import { MarketDataStore, type InstrumentView, type VenueQuote } from '@optarb/marketdata';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
 import { CrossVenueDetector, type CrossVenueSignal } from '@optarb/signals';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
-import { createAuditWriter, type AuditWriter } from '@optarb/persistence';
+import {
+  createAuditWriter,
+  createRedisStateStore,
+  type AuditWriter,
+  type BookSnapshot,
+  type MetricsSnapshot,
+  type RedisPortfolioSnapshot,
+} from '@optarb/persistence';
 import { loadConfig } from './config.js';
 import { SignalTracker } from './signal-tracker.js';
+import { createRuntimeKillSwitch } from './runtime-kill-switch.js';
 
 function toLogger(log: pino.Logger): Logger {
   return {
@@ -177,6 +186,61 @@ function requestedNotionalUsd(intent: ExecutionIntent): Decimal {
   return buy.lt(sell) ? buy : sell;
 }
 
+function toRedisPortfolio(snap: PortfolioSnapshot, tsMs: number): RedisPortfolioSnapshot {
+  return {
+    tsMs,
+    openPositions: snap.openPositions,
+    grossNotionalUsd: snap.grossNotionalUsd.toString(),
+    realizedPnlUsd: snap.realizedPnlUsd.toString(),
+    unrealizedPnlUsd: snap.unrealizedPnlUsd.toString(),
+    feesPaidUsd: snap.feesPaidUsd.toString(),
+    netPnlUsd: snap.netPnlUsd.toString(),
+    perVenue: snap.perVenue.map((v) => ({
+      key: v.key,
+      notionalUsd: v.notionalUsd.toString(),
+      pnlUsd: v.pnlUsd.toString(),
+    })),
+    perUnderlying: snap.perUnderlying.map((u) => ({
+      key: u.key,
+      notionalUsd: u.notionalUsd.toString(),
+      pnlUsd: u.pnlUsd.toString(),
+    })),
+    positions: snap.positions.map((p) => ({
+      venue: p.venue,
+      instrumentId: p.instrumentId,
+      viewKey: p.viewKey,
+      underlying: p.underlying,
+      qty: p.qty.toString(),
+      avgEntryUsd: p.avgEntryUsd.toString(),
+      markUsd: p.markUsd.toString(),
+      notionalUsd: p.notionalUsd.toString(),
+      unrealizedPnlUsd: p.unrealizedPnlUsd.toString(),
+      realizedPnlUsd: p.realizedPnlUsd.toString(),
+      feesPaidUsd: p.feesPaidUsd.toString(),
+    })),
+  };
+}
+
+function bookSnapshotOf(view: InstrumentView, quote: VenueQuote): BookSnapshot {
+  return {
+    venue: quote.venue,
+    instrumentId: quote.instrumentId,
+    viewKey: view.key,
+    bid:
+      quote.bidUsd !== null && quote.bidSizeCoin !== null
+        ? { priceUsd: quote.bidUsd.toString(), sizeCoin: quote.bidSizeCoin.toString() }
+        : null,
+    ask:
+      quote.askUsd !== null && quote.askSizeCoin !== null
+        ? { priceUsd: quote.askUsd.toString(), sizeCoin: quote.askSizeCoin.toString() }
+        : null,
+    markUsd: quote.markUsd?.toString() ?? null,
+    indexPriceUsd: quote.indexPriceUsd?.toString() ?? null,
+    tsMs: quote.tsMs,
+    recvMs: quote.recvMs,
+  };
+}
+
 async function persistExecution(
   audit: AuditWriter,
   executor: PaperExecutor,
@@ -289,8 +353,16 @@ async function main(): Promise<void> {
   const log = pino({ level: cfg.LOG_LEVEL });
   const logger = toLogger(log);
   const audit = createAuditWriter({ PERSIST_POSTGRES_URL: cfg.PERSIST_POSTGRES_URL }, logger);
+  const redisStore = createRedisStateStore({ REDIS_URL: cfg.REDIS_URL }, logger, {
+    killSwitchKey: cfg.RISK_KILL_SWITCH_REDIS_KEY,
+  });
+  const runtimeKillSwitch = createRuntimeKillSwitch(
+    { REDIS_URL: cfg.REDIS_URL, RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH },
+    redisStore,
+  );
   logger.info('trader starting in PAPER mode (no orders will be sent)', {
     auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
+    redisEnabled: !!cfg.REDIS_URL,
   });
 
   const bus = new InMemoryEventBus();
@@ -317,6 +389,7 @@ async function main(): Promise<void> {
       RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
     },
     resolveFeeSchedules(feeOverrides(cfg)),
+    () => runtimeKillSwitch.isActive(),
   );
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
@@ -350,9 +423,12 @@ async function main(): Promise<void> {
   let signalCount = 0;
   let executedCount = 0;
   let riskRejectCount = 0;
+  let reportSignalCount = 0;
+  let reportRiskRejectCount = 0;
+  let reportFillCount = 0;
   const seenKeys = new Set<string>();
   const dailyRealizedPnlBaseline = executor.portfolio.snapshot(store.views()).realizedPnlUsd;
-  const scanTimer = setInterval(() => {
+  const scanTimer = setInterval(async () => {
     const nowMs = clock.nowMs();
     const views = store.views();
     const signals = detector.detect(views, nowMs);
@@ -370,6 +446,7 @@ async function main(): Promise<void> {
 
     for (const s of signals) {
       signalCount++;
+      reportSignalCount++;
       tracker.record(s, nowMs);
       const dedupeKey = `${s.key}:${s.buyVenue}->${s.sellVenue}`;
       const first = !seenKeys.has(dedupeKey);
@@ -387,9 +464,10 @@ async function main(): Promise<void> {
       const snapshot = executor.portfolio.snapshot(store.views());
       const dailyRealizedPnlUsd = snapshot.realizedPnlUsd.sub(dailyRealizedPnlBaseline);
       const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
-      const riskResult = riskEngine.check(intent, riskState, nowMs);
+      const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {
         riskRejectCount += 1;
+        reportRiskRejectCount += 1;
         log.warn(
           {
             signalId: intent.signalId,
@@ -409,7 +487,10 @@ async function main(): Promise<void> {
       }
 
       const outcome = executor.execute(intent);
-      if (outcome.status === 'executed') executedCount += 1;
+      if (outcome.status === 'executed') {
+        executedCount += 1;
+        reportFillCount += outcome.result.fills.length;
+      }
       log.info(
         {
           signalId: intent.signalId,
@@ -441,6 +522,7 @@ async function main(): Promise<void> {
   }, cfg.STATS_INTERVAL_MS);
 
   const reportTimer = setInterval(() => {
+    const nowMs = clock.nowMs();
     const snap = executor.portfolio.snapshot(store.views());
     logger.info('paper portfolio summary', {
       openPositions: snap.openPositions,
@@ -453,6 +535,27 @@ async function main(): Promise<void> {
       perUnderlying: snap.perUnderlying.map((u) => ({ key: u.key, ...fmtExposure(u) })),
     });
     void persistPortfolioSnapshot(audit, snap).catch(() => {});
+
+    const metrics: MetricsSnapshot = {
+      tsMs: nowMs,
+      signalsSeen: reportSignalCount,
+      riskRejects: reportRiskRejectCount,
+      fillsCount: reportFillCount,
+      viewsCount: store.views().length,
+    };
+    void redisStore.publishPortfolioSnapshot(toRedisPortfolio(snap, nowMs)).catch(() => {});
+    void redisStore.publishMetrics(metrics).catch(() => {});
+    for (const view of store.views()) {
+      for (const quote of view.quotes.values()) {
+        void redisStore
+          .publishBookSnapshot(quote.venue, quote.instrumentId, bookSnapshotOf(view, quote))
+          .catch(() => {});
+      }
+    }
+
+    reportSignalCount = 0;
+    reportRiskRejectCount = 0;
+    reportFillCount = 0;
   }, cfg.PAPER_REPORT_INTERVAL_MS);
 
   const shutdown = async (signal: string) => {
@@ -462,6 +565,7 @@ async function main(): Promise<void> {
     clearInterval(reportTimer);
     await Promise.all(running.map((c) => c.disconnect()));
     await audit.close();
+    await redisStore.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

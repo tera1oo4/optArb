@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@optarb/core": "workspace:*",
+    "ioredis": "^5.11.1",
     "pg": "^8.14.1"
   },
   "devDependencies": {

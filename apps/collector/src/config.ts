@@ -58,6 +58,10 @@ const EnvSchema = z.object({
   POLYMARKET_BOOK_DEPTH: z.coerce.number().int().positive().default(10),
 
   CAPTURE_DIR: z.string().default('./data/capture'),
+
+  /** Optional Redis hot-state publisher (ADR-0005). If unset, status is not published. */
+  REDIS_URL: z.string().url().optional(),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   STATS_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
 });

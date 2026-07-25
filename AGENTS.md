@@ -20,7 +20,7 @@
 
 ```
 packages/core             — доменная модель, EventBus, Clock, CaptureSink, L2Book, BaseWsConnector
-packages/persistence      — JSONL capture + replay reader; Postgres audit writer + migrations (optional)
+packages/persistence      — JSONL capture + replay reader; Postgres audit writer + migrations (optional); Redis hot-state store (books, portfolio, metrics, kill switch)
 packages/venues/deribit   — Deribit WS (testnet/prod)
 packages/venues/bybit     — Bybit V5 option WS (testnet/prod)
 packages/venues/okx       — OKX V5 option WS (demo/prod; REST требует browser User-Agent)
@@ -29,7 +29,7 @@ packages/venues/polymarket — Polymarket CLOB (read-only): Gamma REST discovery
 packages/marketdata       — USD-нормализация (coin-quoted × index), consolidated view (canonical key; binary-инструменты в неймспейсе `binary:`)
 packages/signals          — cross-venue детектор + digital-vs-vanilla + YES/NO-parity (freshness + spread bps + executable size)
 packages/execution        — paper-only execution: fee-aware virtual fills, positions, PnL (NO order APIs)
-packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch
+packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch (env fallback + runtime callback)
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
 packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
 packages/backtest-engine  — deterministic replay: marketdata → signals → risk → paper execution → PnL report
