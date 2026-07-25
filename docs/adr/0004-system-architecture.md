@@ -29,11 +29,11 @@ packages/
   execution/       # OMS, двухногая оркестрация, контроль leg-риска, smart routing
   risk/            # pre-trade проверки, лимиты, kill switch (ADR-0006)
   persistence/     # writers в Redis/Postgres, capture JSONL, replay-reader
-  backtest/        # движок replay: та же шина событий, виртуальные часы, симуляция fills
+  backtest-engine/ # движок replay v1: та же шина событий, виртуальные часы, marketdata → signals → risk → paper execution → PnL report
 apps/
   collector/       # только сбор данных + capture (prod-режим 24/7)
   trader/          # сигналы + риск + исполнение (paper/live по флагу)
-  backtest/        # CLI: replay capture-файлов через pipeline
+  backtest/        # thin CLI over packages/backtest-engine: replay capture-файлов через pipeline
 config/            # zod-схемы конфигурации, env-маппинг
 ```
 

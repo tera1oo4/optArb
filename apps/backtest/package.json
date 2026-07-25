@@ -7,14 +7,13 @@
     "start": "tsx src/main.ts"
   },
   "dependencies": {
+    "@optarb/backtest-engine": "workspace:*",
     "@optarb/core": "workspace:*",
-    "@optarb/persistence": "workspace:*",
-    "@optarb/venue-deribit": "workspace:*",
-    "@optarb/venue-bybit": "workspace:*",
-    "@optarb/venue-okx": "workspace:*",
-    "@optarb/venue-binance": "workspace:*",
-    "@optarb/venue-polymarket": "workspace:*",
-    "pino": "^9.6.0"
+    "@optarb/execution": "workspace:*",
+    "@optarb/risk": "workspace:*",
+    "dotenv": "^16.4.7",
+    "pino": "^9.6.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

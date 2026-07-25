@@ -26,30 +26,27 @@ importers:
 
   apps/backtest:
     dependencies:
+      '@optarb/backtest-engine':
+        specifier: workspace:*
+        version: link:../../packages/backtest-engine
       '@optarb/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@optarb/persistence':
+      '@optarb/execution':
         specifier: workspace:*
-        version: link:../../packages/persistence
-      '@optarb/venue-binance':
+        version: link:../../packages/execution
+      '@optarb/risk':
         specifier: workspace:*
-        version: link:../../packages/venues/binance
-      '@optarb/venue-bybit':
-        specifier: workspace:*
-        version: link:../../packages/venues/bybit
-      '@optarb/venue-deribit':
-        specifier: workspace:*
-        version: link:../../packages/venues/deribit
-      '@optarb/venue-okx':
-        specifier: workspace:*
-        version: link:../../packages/venues/okx
-      '@optarb/venue-polymarket':
-        specifier: workspace:*
-        version: link:../../packages/venues/polymarket
+        version: link:../../packages/risk
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
       pino:
         specifier: ^9.6.0
         version: 9.14.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -128,6 +125,52 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/backtest-engine:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+      '@optarb/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@optarb/marketdata':
+        specifier: workspace:*
+        version: link:../marketdata
+      '@optarb/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      '@optarb/risk':
+        specifier: workspace:*
+        version: link:../risk
+      '@optarb/signals':
+        specifier: workspace:*
+        version: link:../signals
+      '@optarb/venue-binance':
+        specifier: workspace:*
+        version: link:../venues/binance
+      '@optarb/venue-bybit':
+        specifier: workspace:*
+        version: link:../venues/bybit
+      '@optarb/venue-deribit':
+        specifier: workspace:*
+        version: link:../venues/deribit
+      '@optarb/venue-okx':
+        specifier: workspace:*
+        version: link:../venues/okx
+      '@optarb/venue-polymarket':
+        specifier: workspace:*
+        version: link:../venues/polymarket
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

@@ -18,6 +18,7 @@ export default defineConfig({
       '@optarb/signals': r('./packages/signals/src/index.ts'),
       '@optarb/execution': r('./packages/execution/src/index.ts'),
       '@optarb/risk': r('./packages/risk/src/index.ts'),
+      '@optarb/backtest-engine': r('./packages/backtest-engine/src/index.ts'),
       '@optarb/venues': r('./packages/venues/all/src/index.ts'),
     },
   },

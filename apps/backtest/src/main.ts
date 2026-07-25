@@ -1,71 +1,43 @@
+import 'dotenv/config';
+import { resolve } from 'node:path';
 import pino from 'pino';
-import {
-  emitAll,
-  InMemoryEventBus,
-  VirtualClock,
-  type AppEventMap,
-  type AppEventType,
-  type Venue,
-} from '@optarb/core';
-import { readCapture } from '@optarb/persistence';
-import * as deribit from '@optarb/venue-deribit';
-import * as bybit from '@optarb/venue-bybit';
-import * as okx from '@optarb/venue-okx';
-import * as binance from '@optarb/venue-binance';
-import * as polymarket from '@optarb/venue-polymarket';
+import { dec, type Logger } from '@optarb/core';
+import type { Venue } from '@optarb/core';
+import { BacktestEngine, formatReport } from '@optarb/backtest-engine';
+import { resolveFeeSchedules } from '@optarb/execution';
+import { loadConfig } from './config.js';
 
-/**
- * Replay engine v0 (ADR-0004): feeds a JSONL capture through the SAME
- * normalization pipeline as the live connectors, on a virtual clock.
- * Each venue keeps its own market context; entries route by `venue`.
- */
-interface VenueReplay {
-  handle: (raw: unknown) => { type: AppEventType; payload: AppEventMap[AppEventType] }[];
-  onGap: (err: unknown) => boolean;
+function toLogger(log: pino.Logger): Logger {
+  return {
+    debug: (msg, meta) => log.debug(meta ?? {}, msg),
+    info: (msg, meta) => log.info(meta ?? {}, msg),
+    warn: (msg, meta) => log.warn(meta ?? {}, msg),
+    error: (msg, meta) => log.error(meta ?? {}, msg),
+  };
 }
 
-function makeVenueReplays(nowMs: () => number): Partial<Record<Venue, VenueReplay>> {
-  const dctx = deribit.createMarketContext({ nowMs });
-  const bctx = bybit.createMarketContext({ nowMs });
-  const octx = okx.createMarketContext({ nowMs });
-  const bnctx = binance.createMarketContext({ nowMs });
-  const pctx = polymarket.createMarketContext({ nowMs });
-  return {
-    deribit: {
-      handle: (raw) => deribit.handleRawMessage(raw, dctx),
-      onGap: (err) => {
-        if (!(err instanceof deribit.SequenceGapError)) return false;
-        dctx.books.get(err.instrument)?.reset();
-        dctx.books.delete(err.instrument);
-        return true;
-      },
-    },
-    bybit: {
-      handle: (raw) => bybit.handleRawMessage(raw, bctx),
-      onGap: (err) => {
-        if (!(err instanceof bybit.SequenceGapError)) return false;
-        bctx.books.delete(err.instrument);
-        bctx.bookSeq.delete(err.instrument);
-        return true;
-      },
-    },
-    okx: {
-      handle: (raw) => okx.handleRawMessage(raw, octx),
-      onGap: () => false,
-    },
-    binance: {
-      handle: (raw) => binance.handleRawMessage(raw, bnctx),
-      onGap: (err) => {
-        if (!(err instanceof binance.SequenceGapError)) return false;
-        binance.resetBook(bnctx, err.instrument);
-        return true;
-      },
-    },
-    polymarket: {
-      handle: (raw) => polymarket.handleRawMessage(raw, pctx),
-      onGap: () => false,
-    },
+function feeOverrides(cfg: ReturnType<typeof loadConfig>) {
+  const out: Partial<
+    Record<Venue, { takerFeeRate?: string; premiumCapFraction?: string; makerFeeRate?: string }>
+  > = {};
+  const set = (v: Venue, taker?: string, cap?: string, maker?: string) => {
+    if (taker || cap || maker)
+      out[v] = { takerFeeRate: taker, premiumCapFraction: cap, makerFeeRate: maker };
   };
+  set('deribit', cfg.PAPER_FEE_DERIBIT_TAKER_RATE, cfg.PAPER_FEE_DERIBIT_CAP_FRACTION);
+  set('bybit', cfg.PAPER_FEE_BYBIT_TAKER_RATE, cfg.PAPER_FEE_BYBIT_CAP_FRACTION);
+  set('okx', cfg.PAPER_FEE_OKX_TAKER_RATE, cfg.PAPER_FEE_OKX_CAP_FRACTION);
+  set('binance', cfg.PAPER_FEE_BINANCE_TAKER_RATE, cfg.PAPER_FEE_BINANCE_CAP_FRACTION);
+  if (cfg.PAPER_FEE_POLYMARKET_TAKER_RATE) {
+    out.polymarket = { takerFeeRate: cfg.PAPER_FEE_POLYMARKET_TAKER_RATE };
+  }
+  return out;
+}
+
+function resolveCaptureFile(file: string): string {
+  if (file.startsWith('/')) return file;
+  const cwd = process.env.INIT_CWD ?? process.cwd();
+  return resolve(cwd, file);
 }
 
 async function main(): Promise<void> {
@@ -75,56 +47,35 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
-  const bus = new InMemoryEventBus();
-  const clock = new VirtualClock();
+  const cfg = loadConfig();
+  const log = pino({ level: cfg.LOG_LEVEL });
 
-  const counters: Record<string, { book: number; trade: number; ticker: number }> = {};
-  for (const v of ['deribit', 'bybit', 'okx', 'binance', 'polymarket'])
-    counters[v] = { book: 0, trade: 0, ticker: 0 };
-  bus.on('market.book', (e) => counters[e.venue]!.book++);
-  bus.on('market.trade', (e) => counters[e.venue]!.trade++);
-  bus.on('market.ticker', (e) => counters[e.venue]!.ticker++);
-
-  const replays = makeVenueReplays(() => clock.nowMs());
-
-  let raw = 0;
-  let skipped = 0;
-  let gaps = 0;
-  const started = Date.now();
-
-  for await (const entry of readCapture(file)) {
-    raw++;
-    const replay = replays[entry.venue];
-    if (!replay || entry.direction !== 'in') {
-      skipped++;
-      continue;
-    }
-    clock.set(entry.tsMs);
-    try {
-      emitAll(bus, replay.handle(entry.payload));
-    } catch (err) {
-      if (replay.onGap(err)) {
-        gaps++;
-      } else {
-        skipped++;
-        log.warn({ err: String(err) }, 'replay: skipped malformed entry');
-      }
-    }
-  }
-
-  log.info(
-    {
-      file,
-      raw,
-      skipped,
-      sequenceGaps: gaps,
-      events: counters,
-      wallMs: Date.now() - started,
-      virtualEndMs: clock.nowMs(),
+  const engine = new BacktestEngine(toLogger(log));
+  const result = await engine.run({
+    captureFile: resolveCaptureFile(file),
+    signalConfig: {
+      minSpreadBps: dec(cfg.SIGNAL_MIN_SPREAD_BPS),
+      maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
+      minSizeUsd: dec(cfg.SIGNAL_MIN_SIZE_USD),
     },
-    'replay finished',
-  );
+    riskConfig: {
+      RISK_MAX_NOTIONAL_PER_TRADE_USD: cfg.RISK_MAX_NOTIONAL_PER_TRADE_USD,
+      RISK_MAX_NOTIONAL_PER_VENUE_USD: cfg.RISK_MAX_NOTIONAL_PER_VENUE_USD,
+      RISK_MAX_NOTIONAL_GLOBAL_USD: cfg.RISK_MAX_NOTIONAL_GLOBAL_USD,
+      RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: cfg.RISK_MAX_EXPOSURE_PER_UNDERLYING_USD,
+      RISK_MAX_DAILY_LOSS_USD: cfg.RISK_MAX_DAILY_LOSS_USD,
+      RISK_MAX_QUOTE_AGE_MS: cfg.RISK_MAX_QUOTE_AGE_MS,
+      RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
+      RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
+    },
+    feeSchedules: resolveFeeSchedules(feeOverrides(cfg)),
+    paperMaxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
+    reportIntervalMs: cfg.PAPER_REPORT_INTERVAL_MS,
+    scanIntervalMs: cfg.SCAN_INTERVAL_MS,
+  });
+
+  log.info({ file }, 'backtest finished');
+  console.log(formatReport(result));
 }
 
 main().catch((err: unknown) => {

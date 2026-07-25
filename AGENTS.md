@@ -32,8 +32,9 @@ packages/execution        — paper-only execution: fee-aware virtual fills, pos
 packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
 packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
+packages/backtest-engine  — deterministic replay: marketdata → signals → risk → paper execution → PnL report
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
-apps/backtest             — replay capture-файлов (multi-venue)
+apps/backtest             — thin CLI over packages/backtest-engine (multi-venue replay)
 apps/trader               — paper-режим: consolidated view + cross-venue сигналы (ордеров НЕТ)
 ```
 
