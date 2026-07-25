@@ -61,6 +61,7 @@
 7. ✅ `packages/execution` (paper-only): fee-aware fills, positions, PnL + wiring в `apps/trader` + hit-rate horizons; 131 тест
 8. ✅ `packages/risk` pre-trade engine: limits, quote freshness, edge-after-fees, kill switch
 9. ✅ Backtest engine v1: replay capture through marketdata + signals + risk + paper execution → PnL report
+10. ✅ Postgres audit persistence + docker-compose (optional, SSOT for fills/positions/risk decisions)
 
 ### Polymarket → каноническая модель (M3)
 

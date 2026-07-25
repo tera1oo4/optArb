@@ -103,6 +103,9 @@ const EnvSchema = z
 
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     STATS_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+
+    /** Optional Postgres audit persistence (ADR-0005). If unset, trader runs without audit. */
+    PERSIST_POSTGRES_URL: z.string().url().optional(),
   })
   .merge(RiskConfigSchema);
 

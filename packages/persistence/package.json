@@ -6,11 +6,19 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "migrate": "tsx src/migrate.ts up",
+    "migrate:down": "tsx src/migrate.ts down",
+    "migrate:create": "tsx src/migrate.ts create"
+  },
   "dependencies": {
-    "@optarb/core": "workspace:*"
+    "@optarb/core": "workspace:*",
+    "pg": "^8.14.1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

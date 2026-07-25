@@ -20,7 +20,7 @@
 
 ```
 packages/core             — доменная модель, EventBus, Clock, CaptureSink, L2Book, BaseWsConnector
-packages/persistence      — JSONL capture + replay reader
+packages/persistence      — JSONL capture + replay reader; Postgres audit writer + migrations (optional)
 packages/venues/deribit   — Deribit WS (testnet/prod)
 packages/venues/bybit     — Bybit V5 option WS (testnet/prod)
 packages/venues/okx       — OKX V5 option WS (demo/prod; REST требует browser User-Agent)
@@ -49,6 +49,7 @@ pnpm format             # prettier --write
 pnpm dev:collector      # сбор рыночных данных + capture (env: VENUES=deribit,bybit,okx,binance,polymarket)
 pnpm dev:trader         # paper-режим: consolidated view + cross-venue сигналы
 pnpm backtest <file>    # replay capture-файла
+pnpm --filter @optarb/persistence migrate  # apply Postgres migrations (needs PERSIST_POSTGRES_URL)
 ```
 
 ### Venue-специфика (важно)

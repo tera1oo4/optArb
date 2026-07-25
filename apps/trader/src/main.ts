@@ -20,6 +20,7 @@ import { MarketDataStore, type InstrumentView } from '@optarb/marketdata';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
 import { CrossVenueDetector, type CrossVenueSignal } from '@optarb/signals';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
+import { createAuditWriter, type AuditWriter } from '@optarb/persistence';
 import { loadConfig } from './config.js';
 import { SignalTracker } from './signal-tracker.js';
 
@@ -169,6 +170,114 @@ function outcomeLabel(outcome: ExecutionOutcome): string {
   return `skipped: ${outcome.reason}`;
 }
 
+function requestedNotionalUsd(intent: ExecutionIntent): Decimal {
+  const buy = intent.legs[0].priceUsd.mul(intent.legs[0].sizeCoin);
+  const sell = intent.legs[1].priceUsd.mul(intent.legs[1].sizeCoin);
+  // Matched notional is constrained by the smaller leg.
+  return buy.lt(sell) ? buy : sell;
+}
+
+async function persistExecution(
+  audit: AuditWriter,
+  executor: PaperExecutor,
+  intent: ExecutionIntent,
+  fills: PaperFill[],
+  views: InstrumentView[],
+): Promise<void> {
+  const orderId = await audit.writeOrder({
+    signalId: intent.signalId,
+    signalKind: intent.signalKind,
+    venueBuy: intent.legs[0].venue,
+    venueSell: intent.legs[1].venue,
+    requestedNotionalUsd: requestedNotionalUsd(intent),
+    status: 'executed',
+  });
+
+  await audit.writeFills(
+    orderId,
+    fills.map((f) => ({
+      signalId: f.signalId,
+      tsMs: f.tsMs,
+      venue: f.venue,
+      instrumentId: f.instrumentId,
+      viewKey: f.viewKey,
+      underlying: f.underlying,
+      side: f.side,
+      priceUsd: f.priceUsd,
+      sizeCoin: f.sizeCoin,
+      notionalUsd: f.notionalUsd,
+      feeUsd: f.feeUsd,
+    })),
+  );
+
+  const snap = executor.portfolio.snapshot(views);
+
+  for (const pos of snap.positions) {
+    await audit.writePosition({
+      venue: pos.venue,
+      instrumentId: pos.instrumentId,
+      viewKey: pos.viewKey,
+      underlying: pos.underlying,
+      qty: pos.qty,
+      avgEntryUsd: pos.avgEntryUsd,
+      markUsd: pos.markUsd,
+      notionalUsd: pos.notionalUsd,
+      unrealizedPnlUsd: pos.unrealizedPnlUsd,
+      realizedPnlUsd: pos.realizedPnlUsd,
+      feesPaidUsd: pos.feesPaidUsd,
+    });
+  }
+
+  await audit.writePortfolioSnapshot({
+    totalNotionalUsd: snap.grossNotionalUsd,
+    realizedPnlUsd: snap.realizedPnlUsd,
+    unrealizedPnlUsd: snap.unrealizedPnlUsd,
+    feesUsd: snap.feesPaidUsd,
+    netPnlUsd: snap.netPnlUsd,
+    positions: snap.positions.map((p) => ({
+      venue: p.venue,
+      instrumentId: p.instrumentId,
+      viewKey: p.viewKey,
+      underlying: p.underlying,
+      qty: p.qty,
+      avgEntryUsd: p.avgEntryUsd,
+      markUsd: p.markUsd,
+      notionalUsd: p.notionalUsd,
+      unrealizedPnlUsd: p.unrealizedPnlUsd,
+      realizedPnlUsd: p.realizedPnlUsd,
+      feesPaidUsd: p.feesPaidUsd,
+    })),
+    createdAt: new Date(),
+  });
+}
+
+async function persistPortfolioSnapshot(
+  audit: AuditWriter,
+  snap: import('@optarb/execution').PortfolioSnapshot,
+): Promise<void> {
+  await audit.writePortfolioSnapshot({
+    totalNotionalUsd: snap.grossNotionalUsd,
+    realizedPnlUsd: snap.realizedPnlUsd,
+    unrealizedPnlUsd: snap.unrealizedPnlUsd,
+    feesUsd: snap.feesPaidUsd,
+    netPnlUsd: snap.netPnlUsd,
+    positions: snap.positions.map((p) => ({
+      venue: p.venue,
+      instrumentId: p.instrumentId,
+      viewKey: p.viewKey,
+      underlying: p.underlying,
+      qty: p.qty,
+      avgEntryUsd: p.avgEntryUsd,
+      markUsd: p.markUsd,
+      notionalUsd: p.notionalUsd,
+      unrealizedPnlUsd: p.unrealizedPnlUsd,
+      realizedPnlUsd: p.realizedPnlUsd,
+      feesPaidUsd: p.feesPaidUsd,
+    })),
+    createdAt: new Date(),
+  });
+}
+
 /**
  * Paper trader (ADR-0006): consumes live market data, maintains the consolidated
  * USD view, emits cross-venue arb signals and records fee-aware virtual fills.
@@ -179,7 +288,10 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = pino({ level: cfg.LOG_LEVEL });
   const logger = toLogger(log);
-  logger.info('trader starting in PAPER mode (no orders will be sent)');
+  const audit = createAuditWriter({ PERSIST_POSTGRES_URL: cfg.PERSIST_POSTGRES_URL }, logger);
+  logger.info('trader starting in PAPER mode (no orders will be sent)', {
+    auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
+  });
 
   const bus = new InMemoryEventBus();
   const clock = new LiveClock();
@@ -285,6 +397,14 @@ async function main(): Promise<void> {
           },
           'risk check denied intent',
         );
+        void audit
+          .writeRiskDecision({
+            signalId: intent.signalId,
+            allowed: false,
+            reasons: riskResult.reasons,
+            checkedAt: new Date(nowMs),
+          })
+          .catch(() => {});
         continue;
       }
 
@@ -300,6 +420,9 @@ async function main(): Promise<void> {
       );
       if (outcome.status === 'executed') {
         for (const fill of outcome.result.fills) logFill(log, fill);
+        void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
+          () => {},
+        );
       }
     }
   }, cfg.SCAN_INTERVAL_MS);
@@ -329,6 +452,7 @@ async function main(): Promise<void> {
       perVenue: snap.perVenue.map((v) => ({ key: v.key, ...fmtExposure(v) })),
       perUnderlying: snap.perUnderlying.map((u) => ({ key: u.key, ...fmtExposure(u) })),
     });
+    void persistPortfolioSnapshot(audit, snap).catch(() => {});
   }, cfg.PAPER_REPORT_INTERVAL_MS);
 
   const shutdown = async (signal: string) => {
@@ -337,6 +461,7 @@ async function main(): Promise<void> {
     clearInterval(statsTimer);
     clearInterval(reportTimer);
     await Promise.all(running.map((c) => c.disconnect()));
+    await audit.close();
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));
