@@ -58,6 +58,7 @@
 4. ✅ Коннекторы Bybit (testnet), OKX (demo), Binance (prod read-only): общий `BaseWsConnector` + `L2Book` в core; multi-venue collector (`VENUES=...`) и multi-venue replay; 53 теста; smoke: все 4 биржи live, 0 gaps на replay
 5. ✅ `packages/marketdata` (USD-нормализация, consolidated view) + `packages/signals` (cross-venue детектор) + `apps/trader` paper: live-проверено — сигналы Deribit-testnet × OKX-prod; 64 теста
 6. ✅ Polymarket connector (read-only) + `packages/pricing` (Black-76, digital) + детекторы digital-vs-vanilla и YES/NO-parity в `packages/signals`
+7. ✅ `packages/execution` (paper-only): fee-aware fills, positions, PnL + wiring в `apps/trader` + hit-rate horizons; 131 тест
 
 ### Polymarket → каноническая модель (M3)
 

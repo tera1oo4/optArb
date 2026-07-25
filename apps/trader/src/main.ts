@@ -1,10 +1,26 @@
 import 'dotenv/config';
 import pino from 'pino';
-import { dec, InMemoryEventBus, LiveClock, nullCapture, type Logger } from '@optarb/core';
-import { MarketDataStore } from '@optarb/marketdata';
+import {
+  dec,
+  InMemoryEventBus,
+  LiveClock,
+  nullCapture,
+  type Decimal,
+  type Logger,
+  type Venue,
+} from '@optarb/core';
+import {
+  PaperExecutor,
+  resolveFeeSchedules,
+  type ExecutionIntent,
+  type ExecutionOutcome,
+  type PaperFill,
+} from '@optarb/execution';
+import { MarketDataStore, type InstrumentView } from '@optarb/marketdata';
 import { CrossVenueDetector, type CrossVenueSignal } from '@optarb/signals';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import { loadConfig } from './config.js';
+import { SignalTracker } from './signal-tracker.js';
 
 function toLogger(log: pino.Logger): Logger {
   return {
@@ -56,10 +72,104 @@ function venueConfigs(cfg: ReturnType<typeof loadConfig>): VenueRuntimeConfigs {
   };
 }
 
+function feeOverrides(cfg: ReturnType<typeof loadConfig>) {
+  const out: Partial<
+    Record<Venue, { takerFeeRate?: string; premiumCapFraction?: string; makerFeeRate?: string }>
+  > = {};
+  const set = (v: Venue, taker?: string, cap?: string, maker?: string) => {
+    if (taker || cap || maker)
+      out[v] = { takerFeeRate: taker, premiumCapFraction: cap, makerFeeRate: maker };
+  };
+  set('deribit', cfg.PAPER_FEE_DERIBIT_TAKER_RATE, cfg.PAPER_FEE_DERIBIT_CAP_FRACTION);
+  set('bybit', cfg.PAPER_FEE_BYBIT_TAKER_RATE, cfg.PAPER_FEE_BYBIT_CAP_FRACTION);
+  set('okx', cfg.PAPER_FEE_OKX_TAKER_RATE, cfg.PAPER_FEE_OKX_CAP_FRACTION);
+  set('binance', cfg.PAPER_FEE_BINANCE_TAKER_RATE, cfg.PAPER_FEE_BINANCE_CAP_FRACTION);
+  if (cfg.PAPER_FEE_POLYMARKET_TAKER_RATE) {
+    out.polymarket = { takerFeeRate: cfg.PAPER_FEE_POLYMARKET_TAKER_RATE };
+  }
+  return out;
+}
+
+function crossVenueIntent(signal: CrossVenueSignal, view: InstrumentView): ExecutionIntent | null {
+  const buy = view.quotes.get(signal.buyVenue);
+  const sell = view.quotes.get(signal.sellVenue);
+  if (!buy || !sell) return null;
+  if (buy.askUsd === null || sell.bidUsd === null) return null;
+  if (buy.askSizeCoin === null || sell.bidSizeCoin === null) return null;
+
+  const sizeCoin = buy.askSizeCoin.lte(sell.bidSizeCoin) ? buy.askSizeCoin : sell.bidSizeCoin;
+  return {
+    signalId: `cross-venue:${view.key}:${signal.buyVenue}->${signal.sellVenue}:${signal.tsMs}`,
+    signalKind: 'cross-venue',
+    legs: [
+      {
+        venue: signal.buyVenue,
+        instrumentId: signal.buyInstrumentId,
+        viewKey: view.key,
+        underlying: view.underlying,
+        side: 'buy',
+        priceUsd: buy.askUsd,
+        sizeCoin,
+        indexPriceUsd: buy.indexPriceUsd,
+      },
+      {
+        venue: signal.sellVenue,
+        instrumentId: signal.sellInstrumentId,
+        viewKey: view.key,
+        underlying: view.underlying,
+        side: 'sell',
+        priceUsd: sell.bidUsd,
+        sizeCoin,
+        indexPriceUsd: sell.indexPriceUsd,
+      },
+    ],
+    tsMs: signal.tsMs,
+  };
+}
+
+function logFill(log: pino.Logger, fill: PaperFill): void {
+  log.info(
+    {
+      signalId: fill.signalId,
+      venue: fill.venue,
+      instrumentId: fill.instrumentId,
+      side: fill.side,
+      priceUsd: fill.priceUsd.toString(),
+      sizeCoin: fill.sizeCoin.toString(),
+      notionalUsd: fill.notionalUsd.toString(),
+      feeUsd: fill.feeUsd.toString(),
+    },
+    'paper fill',
+  );
+}
+
+function logSignal(log: pino.Logger, s: CrossVenueSignal, level: 'info' | 'debug'): void {
+  log[level](
+    {
+      signal: s.kind,
+      key: s.key,
+      buy: `${s.buyVenue} @ ${s.buyPriceUsd.toString()}`,
+      sell: `${s.sellVenue} @ ${s.sellPriceUsd.toString()}`,
+      spreadBps: s.spreadBps.toFixed(1),
+      sizeUsd: s.sizeUsd.toFixed(0),
+    },
+    'cross-venue arb signal',
+  );
+}
+
+function outcomeLabel(outcome: ExecutionOutcome): string {
+  if (outcome.status === 'executed') {
+    const r = outcome.result;
+    return `executed gross=${r.grossEdgeUsd.toFixed(2)} fees=${r.feesUsd.toFixed(2)} net=${r.netEdgeUsd.toFixed(2)}`;
+  }
+  return `skipped: ${outcome.reason}`;
+}
+
 /**
  * Paper trader (ADR-0006): consumes live market data, maintains the consolidated
- * USD view and emits cross-venue arb signals. NEVER sends orders — paper only.
- * Live execution will require LIVE_TRADING=true + operator confirmation.
+ * USD view, emits cross-venue arb signals and records fee-aware virtual fills.
+ * NEVER sends orders — paper only. Live execution will require LIVE_TRADING=true
+ * + operator confirmation.
  */
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -75,6 +185,11 @@ async function main(): Promise<void> {
     maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
     minSizeUsd: dec(cfg.SIGNAL_MIN_SIZE_USD),
   });
+  const executor = new PaperExecutor({
+    maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
+    fees: resolveFeeSchedules(feeOverrides(cfg)),
+  });
+  const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
   bus.on('market.ticker', (t) => store.applyTicker(t));
   bus.on('market.book', (b) => store.applyBook(b));
@@ -104,29 +219,85 @@ async function main(): Promise<void> {
   if (running.length === 0) throw new Error('no venue started — nothing to trade');
 
   let signalCount = 0;
+  let executedCount = 0;
   const seenKeys = new Set<string>();
   const scanTimer = setInterval(() => {
-    const signals = detector.detect(store.views(), clock.nowMs());
+    const nowMs = clock.nowMs();
+    const views = store.views();
+    const signals = detector.detect(views, nowMs);
+    tracker.update(views, nowMs).forEach((o) =>
+      log.info(
+        {
+          signalId: o.signalId,
+          entrySpreadBps: o.entrySpreadBps,
+          horizonMs: o.horizonMs,
+          spreadBps: o.spreadBps,
+        },
+        'signal outcome',
+      ),
+    );
+
     for (const s of signals) {
       signalCount++;
-      // Log first occurrence per instrument+direction loudly, repeats at debug
+      tracker.record(s, nowMs);
       const dedupeKey = `${s.key}:${s.buyVenue}->${s.sellVenue}`;
       const first = !seenKeys.has(dedupeKey);
       seenKeys.add(dedupeKey);
       logSignal(log, s, first ? 'info' : 'debug');
+
+      // Paper fills on first occurrence only to avoid re-executing the same
+      // quote every scan. Repeated signals are counted for stats.
+      if (!first) continue;
+      const view = store.getView(s.key);
+      if (!view) continue;
+      const intent = crossVenueIntent(s, view);
+      if (!intent) continue;
+      const outcome = executor.execute(intent);
+      if (outcome.status === 'executed') executedCount += 1;
+      log.info(
+        {
+          signalId: intent.signalId,
+          outcome: outcomeLabel(outcome),
+          fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
+        },
+        'paper execution',
+      );
+      if (outcome.status === 'executed') {
+        for (const fill of outcome.result.fills) logFill(log, fill);
+      }
     }
   }, cfg.SCAN_INTERVAL_MS);
 
   const statsTimer = setInterval(() => {
-    logger.info('trader stats', { instruments: store.views().length, signals: signalCount });
+    logger.info('trader stats', {
+      instruments: store.views().length,
+      signals: signalCount,
+      executed: executedCount,
+    });
     signalCount = 0;
+    executedCount = 0;
     seenKeys.clear();
   }, cfg.STATS_INTERVAL_MS);
+
+  const reportTimer = setInterval(() => {
+    const snap = executor.portfolio.snapshot(store.views());
+    logger.info('paper portfolio summary', {
+      openPositions: snap.openPositions,
+      grossNotionalUsd: snap.grossNotionalUsd.toString(),
+      realizedPnlUsd: snap.realizedPnlUsd.toString(),
+      unrealizedPnlUsd: snap.unrealizedPnlUsd.toString(),
+      feesPaidUsd: snap.feesPaidUsd.toString(),
+      netPnlUsd: snap.netPnlUsd.toString(),
+      perVenue: snap.perVenue.map((v) => ({ key: v.key, ...fmtExposure(v) })),
+      perUnderlying: snap.perUnderlying.map((u) => ({ key: u.key, ...fmtExposure(u) })),
+    });
+  }, cfg.PAPER_REPORT_INTERVAL_MS);
 
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal });
     clearInterval(scanTimer);
     clearInterval(statsTimer);
+    clearInterval(reportTimer);
     await Promise.all(running.map((c) => c.disconnect()));
     process.exit(0);
   };
@@ -134,18 +305,8 @@ async function main(): Promise<void> {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-function logSignal(log: pino.Logger, s: CrossVenueSignal, level: 'info' | 'debug'): void {
-  log[level](
-    {
-      signal: s.kind,
-      key: s.key,
-      buy: `${s.buyVenue} @ ${s.buyPriceUsd.toString()}`,
-      sell: `${s.sellVenue} @ ${s.sellPriceUsd.toString()}`,
-      spreadBps: s.spreadBps.toFixed(1),
-      sizeUsd: s.sizeUsd.toFixed(0),
-    },
-    'cross-venue arb signal',
-  );
+function fmtExposure(e: { notionalUsd: Decimal; pnlUsd: Decimal }) {
+  return { notionalUsd: e.notionalUsd.toString(), pnlUsd: e.pnlUsd.toString() };
 }
 
 main().catch((err: unknown) => {

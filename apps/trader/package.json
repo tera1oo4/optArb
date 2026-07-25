@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@optarb/core": "workspace:*",
+    "@optarb/execution": "workspace:*",
     "@optarb/marketdata": "workspace:*",
     "@optarb/signals": "workspace:*",
     "@optarb/venues": "workspace:*",

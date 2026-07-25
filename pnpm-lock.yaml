@@ -97,6 +97,9 @@ importers:
       '@optarb/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@optarb/execution':
+        specifier: workspace:*
+        version: link:../../packages/execution
       '@optarb/marketdata':
         specifier: workspace:*
         version: link:../../packages/marketdata
@@ -144,6 +147,22 @@ importers:
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/execution:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+      '@optarb/marketdata':
+        specifier: workspace:*
+        version: link:../marketdata
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
