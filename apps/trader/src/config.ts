@@ -79,6 +79,7 @@ const EnvSchema = z
     /** Paper execution limits (ADR-0006) */
     PAPER_MAX_NOTIONAL_USD: z.coerce.number().positive().default(10_000),
     PAPER_REPORT_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+    PAPER_FILL_SLIPPAGE_BPS: z.coerce.number().nonnegative().default(0),
     PAPER_SIGNAL_HORIZONS_MS: z
       .string()
       .default('60000,300000')
@@ -100,6 +101,14 @@ const EnvSchema = z
     PAPER_FEE_BINANCE_TAKER_RATE: decimalString.optional(),
     PAPER_FEE_BINANCE_CAP_FRACTION: decimalString.optional(),
     PAPER_FEE_POLYMARKET_TAKER_RATE: decimalString.optional(),
+
+    /** OMS two-legged state machine (M9; still paper-only, no real orders) */
+    OMS_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    OMS_LEG_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+    OMS_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
 
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     STATS_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),

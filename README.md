@@ -63,6 +63,7 @@
 9. ✅ Backtest engine v1: replay capture through marketdata + signals + risk + paper execution → PnL report
 10. ✅ Postgres audit persistence + docker-compose (optional, SSOT for fills/positions/risk decisions)
 11. ✅ Redis hot state + runtime kill switch: `RedisStateStore` in `@optarb/persistence`, `RuntimeKillSwitch` in `apps/trader`, per-venue-ready interface
+12. ✅ OMS two-legged state machine + leg-risk control (paper-only): `OmsEngine`, `PaperOrderSimulator`, `OMS_ENABLED` knob in `apps/trader`
 
 ### Polymarket → каноническая модель (M3)
 

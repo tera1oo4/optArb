@@ -376,6 +376,15 @@ async function main(): Promise<void> {
   const executor = new PaperExecutor({
     maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
     fees: resolveFeeSchedules(feeOverrides(cfg)),
+    oms: cfg.OMS_ENABLED
+      ? {
+          enabled: true,
+          legTimeoutMs: cfg.OMS_LEG_TIMEOUT_MS,
+          maxAttempts: cfg.OMS_MAX_ATTEMPTS,
+          slippageBps: dec(cfg.PAPER_FILL_SLIPPAGE_BPS),
+        }
+      : undefined,
+    logger,
   });
   const riskEngine = new RiskEngine(
     {
@@ -431,6 +440,7 @@ async function main(): Promise<void> {
   const scanTimer = setInterval(async () => {
     const nowMs = clock.nowMs();
     const views = store.views();
+    executor.tick(nowMs, views);
     const signals = detector.detect(views, nowMs);
     tracker.update(views, nowMs).forEach((o) =>
       log.info(
@@ -514,6 +524,7 @@ async function main(): Promise<void> {
       signals: signalCount,
       executed: executedCount,
       riskRejects: riskRejectCount,
+      oms: executor.omsStats(),
     });
     signalCount = 0;
     executedCount = 0;
@@ -533,6 +544,7 @@ async function main(): Promise<void> {
       netPnlUsd: snap.netPnlUsd.toString(),
       perVenue: snap.perVenue.map((v) => ({ key: v.key, ...fmtExposure(v) })),
       perUnderlying: snap.perUnderlying.map((u) => ({ key: u.key, ...fmtExposure(u) })),
+      oms: executor.omsStats(),
     });
     void persistPortfolioSnapshot(audit, snap).catch(() => {});
 
