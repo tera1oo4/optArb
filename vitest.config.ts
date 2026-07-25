@@ -17,6 +17,7 @@ export default defineConfig({
       '@optarb/pricing': r('./packages/pricing/src/index.ts'),
       '@optarb/signals': r('./packages/signals/src/index.ts'),
       '@optarb/execution': r('./packages/execution/src/index.ts'),
+      '@optarb/risk': r('./packages/risk/src/index.ts'),
       '@optarb/venues': r('./packages/venues/all/src/index.ts'),
     },
   },

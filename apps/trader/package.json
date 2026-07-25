@@ -10,6 +10,7 @@
     "@optarb/core": "workspace:*",
     "@optarb/execution": "workspace:*",
     "@optarb/marketdata": "workspace:*",
+    "@optarb/risk": "workspace:*",
     "@optarb/signals": "workspace:*",
     "@optarb/venues": "workspace:*",
     "dotenv": "^16.4.7",

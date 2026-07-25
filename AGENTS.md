@@ -29,6 +29,7 @@ packages/venues/polymarket — Polymarket CLOB (read-only): Gamma REST discovery
 packages/marketdata       — USD-нормализация (coin-quoted × index), consolidated view (canonical key; binary-инструменты в неймспейсе `binary:`)
 packages/signals          — cross-venue детектор + digital-vs-vanilla + YES/NO-parity (freshness + spread bps + executable size)
 packages/execution        — paper-only execution: fee-aware virtual fills, positions, PnL (NO order APIs)
+packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
 packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)

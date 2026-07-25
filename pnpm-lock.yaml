@@ -103,6 +103,9 @@ importers:
       '@optarb/marketdata':
         specifier: workspace:*
         version: link:../../packages/marketdata
+      '@optarb/risk':
+        specifier: workspace:*
+        version: link:../../packages/risk
       '@optarb/signals':
         specifier: workspace:*
         version: link:../../packages/signals
@@ -198,6 +201,25 @@ importers:
       '@optarb/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/risk:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+      '@optarb/execution':
+        specifier: workspace:*
+        version: link:../execution
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

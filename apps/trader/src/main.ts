@@ -17,6 +17,7 @@ import {
   type PaperFill,
 } from '@optarb/execution';
 import { MarketDataStore, type InstrumentView } from '@optarb/marketdata';
+import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
 import { CrossVenueDetector, type CrossVenueSignal } from '@optarb/signals';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import { loadConfig } from './config.js';
@@ -98,6 +99,7 @@ function crossVenueIntent(signal: CrossVenueSignal, view: InstrumentView): Execu
   if (buy.askSizeCoin === null || sell.bidSizeCoin === null) return null;
 
   const sizeCoin = buy.askSizeCoin.lte(sell.bidSizeCoin) ? buy.askSizeCoin : sell.bidSizeCoin;
+  const quoteRecvMs = Math.max(buy.recvMs, sell.recvMs);
   return {
     signalId: `cross-venue:${view.key}:${signal.buyVenue}->${signal.sellVenue}:${signal.tsMs}`,
     signalKind: 'cross-venue',
@@ -111,6 +113,7 @@ function crossVenueIntent(signal: CrossVenueSignal, view: InstrumentView): Execu
         priceUsd: buy.askUsd,
         sizeCoin,
         indexPriceUsd: buy.indexPriceUsd,
+        quoteRecvMs,
       },
       {
         venue: signal.sellVenue,
@@ -121,6 +124,7 @@ function crossVenueIntent(signal: CrossVenueSignal, view: InstrumentView): Execu
         priceUsd: sell.bidUsd,
         sizeCoin,
         indexPriceUsd: sell.indexPriceUsd,
+        quoteRecvMs,
       },
     ],
     tsMs: signal.tsMs,
@@ -189,6 +193,19 @@ async function main(): Promise<void> {
     maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
     fees: resolveFeeSchedules(feeOverrides(cfg)),
   });
+  const riskEngine = new RiskEngine(
+    {
+      RISK_MAX_NOTIONAL_PER_TRADE_USD: cfg.RISK_MAX_NOTIONAL_PER_TRADE_USD,
+      RISK_MAX_NOTIONAL_PER_VENUE_USD: cfg.RISK_MAX_NOTIONAL_PER_VENUE_USD,
+      RISK_MAX_NOTIONAL_GLOBAL_USD: cfg.RISK_MAX_NOTIONAL_GLOBAL_USD,
+      RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: cfg.RISK_MAX_EXPOSURE_PER_UNDERLYING_USD,
+      RISK_MAX_DAILY_LOSS_USD: cfg.RISK_MAX_DAILY_LOSS_USD,
+      RISK_MAX_QUOTE_AGE_MS: cfg.RISK_MAX_QUOTE_AGE_MS,
+      RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
+      RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
+    },
+    resolveFeeSchedules(feeOverrides(cfg)),
+  );
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
   bus.on('market.ticker', (t) => store.applyTicker(t));
@@ -220,7 +237,9 @@ async function main(): Promise<void> {
 
   let signalCount = 0;
   let executedCount = 0;
+  let riskRejectCount = 0;
   const seenKeys = new Set<string>();
+  const dailyRealizedPnlBaseline = executor.portfolio.snapshot(store.views()).realizedPnlUsd;
   const scanTimer = setInterval(() => {
     const nowMs = clock.nowMs();
     const views = store.views();
@@ -252,6 +271,23 @@ async function main(): Promise<void> {
       if (!view) continue;
       const intent = crossVenueIntent(s, view);
       if (!intent) continue;
+
+      const snapshot = executor.portfolio.snapshot(store.views());
+      const dailyRealizedPnlUsd = snapshot.realizedPnlUsd.sub(dailyRealizedPnlBaseline);
+      const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
+      const riskResult = riskEngine.check(intent, riskState, nowMs);
+      if (!riskResult.allowed) {
+        riskRejectCount += 1;
+        log.warn(
+          {
+            signalId: intent.signalId,
+            reasons: riskResult.reasons,
+          },
+          'risk check denied intent',
+        );
+        continue;
+      }
+
       const outcome = executor.execute(intent);
       if (outcome.status === 'executed') executedCount += 1;
       log.info(
@@ -273,9 +309,11 @@ async function main(): Promise<void> {
       instruments: store.views().length,
       signals: signalCount,
       executed: executedCount,
+      riskRejects: riskRejectCount,
     });
     signalCount = 0;
     executedCount = 0;
+    riskRejectCount = 0;
     seenKeys.clear();
   }, cfg.STATS_INTERVAL_MS);
 

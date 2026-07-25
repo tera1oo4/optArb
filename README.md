@@ -59,6 +59,7 @@
 5. ✅ `packages/marketdata` (USD-нормализация, consolidated view) + `packages/signals` (cross-venue детектор) + `apps/trader` paper: live-проверено — сигналы Deribit-testnet × OKX-prod; 64 теста
 6. ✅ Polymarket connector (read-only) + `packages/pricing` (Black-76, digital) + детекторы digital-vs-vanilla и YES/NO-parity в `packages/signals`
 7. ✅ `packages/execution` (paper-only): fee-aware fills, positions, PnL + wiring в `apps/trader` + hit-rate horizons; 131 тест
+8. ✅ `packages/risk` pre-trade engine: limits, quote freshness, edge-after-fees, kill switch
 
 ### Polymarket → каноническая модель (M3)
 

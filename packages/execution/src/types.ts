@@ -19,6 +19,8 @@ export interface ExecutionLeg {
   sizeCoin: Decimal;
   /** Venue index price in USD; option fee model needs it, binary ignores it */
   indexPriceUsd: Decimal | null;
+  /** Quote receive timestamp used by the risk engine for freshness checks. */
+  quoteRecvMs?: number;
 }
 
 export interface ExecutionIntent {
