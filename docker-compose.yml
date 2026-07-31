@@ -32,6 +32,47 @@ services:
       timeout: 3s
       retries: 5
 
+  trader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: optarb-trader
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PERSIST_POSTGRES_URL=${PERSIST_POSTGRES_URL:-postgresql://optarb:optarb@postgres:5432/optarb}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - '${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - capture_data:/app/data/capture
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: optarb-collector
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    command: ['node', '--import', 'tsx', 'apps/collector/src/main.ts']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - capture_data:/app/data/capture
+
 volumes:
   postgres_data:
   redis_data:
+  capture_data:

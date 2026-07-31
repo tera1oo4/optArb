@@ -1,0 +1,21 @@
+# Git / secrets
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.kimi-code/local.toml
+
+# Dependencies and build artifacts
+node_modules
+dist
+*.tsbuildinfo
+
+# Runtime data
+data/capture
+*.log
+
+# Editor / OS
+.DS_Store
+.vscode
+.idea

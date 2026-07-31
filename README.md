@@ -65,6 +65,7 @@
 11. ✅ Redis hot state + runtime kill switch: `RedisStateStore` in `@optarb/persistence`, `RuntimeKillSwitch` in `apps/trader`, per-venue-ready interface
 12. ✅ OMS two-legged state machine + leg-risk control (paper-only): `OmsEngine`, `PaperOrderSimulator`, `OMS_ENABLED` knob in `apps/trader`
 13. ✅ Analytics & reporting: hit-rate, PnL curves, per-detector/per-venue attribution from audit data
+14. ✅ Production readiness: CI/CD, rotating capture, health endpoint, Docker image
 
 ### Polymarket → каноническая модель (M3)
 

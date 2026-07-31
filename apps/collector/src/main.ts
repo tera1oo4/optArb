@@ -1,13 +1,20 @@
 import 'dotenv/config';
 import pino from 'pino';
 import {
+  createHealthServer,
+  HealthRegistry,
   InMemoryEventBus,
   LiveClock,
   type ConnectorStatus,
   type Logger,
   type Venue,
 } from '@optarb/core';
-import { createRedisStateStore, JsonlCaptureSink } from '@optarb/persistence';
+import type { Server } from 'node:http';
+import {
+  createRedisStateStore,
+  JsonlCaptureSink,
+  RotatingJsonlCaptureSink,
+} from '@optarb/persistence';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import { loadConfig, type CollectorConfig } from './config.js';
 
@@ -68,7 +75,14 @@ async function main(): Promise<void> {
 
   const bus = new InMemoryEventBus();
   const clock = new LiveClock();
-  const capture = new JsonlCaptureSink({ dir: cfg.CAPTURE_DIR });
+  const capture = cfg.CAPTURE_ROTATE_HOURLY
+    ? new RotatingJsonlCaptureSink({
+        dir: cfg.CAPTURE_DIR,
+        clock,
+        retentionHours: cfg.CAPTURE_RETENTION_HOURS,
+        logger,
+      })
+    : new JsonlCaptureSink({ dir: cfg.CAPTURE_DIR });
   const redisStore = createRedisStateStore({ REDIS_URL: cfg.REDIS_URL }, logger);
   const configs = venueConfigs(cfg);
   const connectors = cfg.VENUES.map((v) =>
@@ -79,13 +93,74 @@ async function main(): Promise<void> {
   for (const v of cfg.VENUES) counters[v] = { book: 0, trade: 0, ticker: 0 };
   const statuses = new Map<Venue, ConnectorStatus>();
   const instrumentCounts = new Map<Venue, number>();
-  bus.on('market.book', (e) => counters[e.venue]!.book++);
-  bus.on('market.trade', (e) => counters[e.venue]!.trade++);
-  bus.on('market.ticker', (e) => counters[e.venue]!.ticker++);
+  const lastMessageTs = new Map<Venue, number>();
+  let lastCaptureTs = 0;
+  const updateLastMessageTs = (venue: Venue, tsMs: number) => {
+    lastMessageTs.set(venue, tsMs);
+    lastCaptureTs = tsMs;
+  };
+  bus.on('market.book', (e) => {
+    counters[e.venue]!.book++;
+    updateLastMessageTs(e.venue, e.recvMs);
+  });
+  bus.on('market.trade', (e) => {
+    counters[e.venue]!.trade++;
+    updateLastMessageTs(e.venue, e.recvMs);
+  });
+  bus.on('market.ticker', (e) => {
+    counters[e.venue]!.ticker++;
+    updateLastMessageTs(e.venue, e.recvMs);
+  });
   bus.on('connector.status', (s) => {
     statuses.set(s.venue, s);
     logger.info('connector status', { ...s });
   });
+
+  const healthRegistry = new HealthRegistry();
+  const VENUE_STALE_MS = 30_000;
+  const SCAN_STALE_MS = 60_000;
+  for (const venue of cfg.VENUES) {
+    healthRegistry.register(
+      `venue:${venue}`,
+      () => {
+        const status = statuses.get(venue);
+        const lastTs = lastMessageTs.get(venue) ?? 0;
+        const nowMs = clock.nowMs();
+        if (!status || status.state !== 'connected') {
+          return { healthy: false, message: `state=${status?.state ?? 'unknown'}` };
+        }
+        if (nowMs - lastTs > VENUE_STALE_MS) {
+          return { healthy: false, message: `no message for ${nowMs - lastTs}ms` };
+        }
+        return { healthy: true };
+      },
+      { critical: true },
+    );
+  }
+  healthRegistry.register('kill-switch', async () => {
+    if (!cfg.REDIS_URL) return { healthy: true, message: 'disabled' };
+    const active = await redisStore.getKillSwitch();
+    return active ? { healthy: false, message: 'active' } : { healthy: true };
+  });
+  healthRegistry.register('postgres', () => ({ healthy: true, message: 'disabled' }));
+  healthRegistry.register('last-scan', () => {
+    const nowMs = clock.nowMs();
+    const stale = nowMs - lastCaptureTs > SCAN_STALE_MS;
+    return {
+      healthy: !stale,
+      message: stale ? `no capture for ${nowMs - lastCaptureTs}ms` : 'recent',
+    };
+  });
+
+  let healthServer: Server | undefined;
+  if (cfg.HEALTH_ENABLED) {
+    try {
+      healthServer = await createHealthServer(healthRegistry, cfg.HEALTH_PORT);
+      logger.info('health server listening', { port: cfg.HEALTH_PORT });
+    } catch (err) {
+      logger.error('health server failed to start', { err: String(err) });
+    }
+  }
 
   const running: typeof connectors = [];
   for (const connector of connectors) {
@@ -134,6 +209,9 @@ async function main(): Promise<void> {
     await Promise.all(running.map((c) => c.disconnect()));
     await capture.close();
     await redisStore.close();
+    if (healthServer) {
+      await new Promise<void>((resolve) => healthServer!.close(() => resolve()));
+    }
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

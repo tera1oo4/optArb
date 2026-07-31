@@ -1,5 +1,7 @@
 export { JsonlCaptureSink } from './jsonl-capture.js';
 export type { JsonlCaptureOptions } from './jsonl-capture.js';
+export { RotatingJsonlCaptureSink } from './rotating-jsonl-capture.js';
+export type { RotatingJsonlCaptureOptions } from './rotating-jsonl-capture.js';
 export { readCapture } from './jsonl-replay.js';
 export {
   createAuditWriter,

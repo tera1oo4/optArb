@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import pino from 'pino';
 import {
+  createHealthServer,
   dec,
+  HealthRegistry,
   InMemoryEventBus,
   LiveClock,
   nullCapture,
@@ -9,6 +11,7 @@ import {
   type Logger,
   type Venue,
 } from '@optarb/core';
+import type { Server } from 'node:http';
 import {
   PaperExecutor,
   resolveFeeSchedules,
@@ -402,9 +405,20 @@ async function main(): Promise<void> {
   );
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
-  bus.on('market.ticker', (t) => store.applyTicker(t));
-  bus.on('market.book', (b) => store.applyBook(b));
-  bus.on('connector.status', (s) => logger.info('connector status', { ...s }));
+  const statuses = new Map<Venue, import('@optarb/core').ConnectorStatus>();
+  const lastMessageTs = new Map<Venue, number>();
+  bus.on('market.ticker', (t) => {
+    store.applyTicker(t);
+    lastMessageTs.set(t.venue, t.recvMs);
+  });
+  bus.on('market.book', (b) => {
+    store.applyBook(b);
+    lastMessageTs.set(b.venue, b.recvMs);
+  });
+  bus.on('connector.status', (s) => {
+    statuses.set(s.venue, s);
+    logger.info('connector status', { ...s });
+  });
 
   const connectors = cfg.VENUES.map((v) =>
     createVenueConnector(v, venueConfigs(cfg), { bus, clock, capture: nullCapture, logger }),
@@ -429,6 +443,59 @@ async function main(): Promise<void> {
   }
   if (running.length === 0) throw new Error('no venue started — nothing to trade');
 
+  const healthRegistry = new HealthRegistry();
+  const VENUE_STALE_MS = 30_000;
+  const SCAN_STALE_MS = Math.max(60_000, cfg.SCAN_INTERVAL_MS * 2 + 1_000);
+  for (const venue of cfg.VENUES) {
+    healthRegistry.register(
+      `venue:${venue}`,
+      () => {
+        const status = statuses.get(venue);
+        const lastTs = lastMessageTs.get(venue) ?? 0;
+        const nowMs = clock.nowMs();
+        if (!status || status.state !== 'connected') {
+          return { healthy: false, message: `state=${status?.state ?? 'unknown'}` };
+        }
+        if (nowMs - lastTs > VENUE_STALE_MS) {
+          return { healthy: false, message: `no message for ${nowMs - lastTs}ms` };
+        }
+        return { healthy: true };
+      },
+      { critical: true },
+    );
+  }
+  healthRegistry.register('kill-switch', async () => {
+    const active = await runtimeKillSwitch.isActive();
+    return active ? { healthy: false, message: 'active' } : { healthy: true };
+  });
+  healthRegistry.register(
+    'postgres',
+    async () => {
+      const ok = await audit.ping();
+      return ok ? { healthy: true } : { healthy: false, message: 'ping failed' };
+    },
+    { critical: cfg.PERSIST_POSTGRES_URL ? true : false },
+  );
+  let lastScanTs = 0;
+  healthRegistry.register('last-scan', () => {
+    const nowMs = clock.nowMs();
+    const stale = nowMs - lastScanTs > SCAN_STALE_MS;
+    return {
+      healthy: !stale,
+      message: stale ? `no scan for ${nowMs - lastScanTs}ms` : 'recent',
+    };
+  });
+
+  let healthServer: Server | undefined;
+  if (cfg.HEALTH_ENABLED) {
+    try {
+      healthServer = await createHealthServer(healthRegistry, cfg.HEALTH_PORT);
+      logger.info('health server listening', { port: cfg.HEALTH_PORT });
+    } catch (err) {
+      logger.error('health server failed to start', { err: String(err) });
+    }
+  }
+
   let signalCount = 0;
   let executedCount = 0;
   let riskRejectCount = 0;
@@ -439,6 +506,7 @@ async function main(): Promise<void> {
   const dailyRealizedPnlBaseline = executor.portfolio.snapshot(store.views()).realizedPnlUsd;
   const scanTimer = setInterval(async () => {
     const nowMs = clock.nowMs();
+    lastScanTs = nowMs;
     const views = store.views();
     executor.tick(nowMs, views);
     const signals = detector.detect(views, nowMs);
@@ -578,6 +646,9 @@ async function main(): Promise<void> {
     await Promise.all(running.map((c) => c.disconnect()));
     await audit.close();
     await redisStore.close();
+    if (healthServer) {
+      await new Promise<void>((resolve) => healthServer!.close(() => resolve()));
+    }
     process.exit(0);
   };
   process.once('SIGINT', () => void shutdown('SIGINT'));

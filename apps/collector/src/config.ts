@@ -59,11 +59,25 @@ const EnvSchema = z.object({
 
   CAPTURE_DIR: z.string().default('./data/capture'),
 
+  /** Hourly rotation + gzip for capture files (M11). */
+  CAPTURE_ROTATE_HOURLY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  CAPTURE_RETENTION_HOURS: z.coerce.number().int().positive().default(168),
+
   /** Optional Redis hot-state publisher (ADR-0005). If unset, status is not published. */
   REDIS_URL: z.string().url().optional(),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   STATS_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
+
+  /** Health endpoint (M11). */
+  HEALTH_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  HEALTH_PORT: z.coerce.number().int().positive().default(8080),
 });
 
 export type CollectorConfig = z.infer<typeof EnvSchema>;

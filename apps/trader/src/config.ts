@@ -121,6 +121,13 @@ const EnvSchema = z
 
     /** Redis key for the global kill switch; default is `optarb:kill:switch`. */
     RISK_KILL_SWITCH_REDIS_KEY: z.string().default('optarb:kill:switch'),
+
+    /** Health endpoint (M11). */
+    HEALTH_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    HEALTH_PORT: z.coerce.number().int().positive().default(8080),
   })
   .merge(RiskConfigSchema);
 

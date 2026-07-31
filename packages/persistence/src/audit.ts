@@ -65,6 +65,8 @@ export interface AuditWriter {
   writePosition(position: AuditPositionInput): Promise<void>;
   writeRiskDecision(decision: AuditRiskDecisionInput): Promise<void>;
   writePortfolioSnapshot(snapshot: AuditPortfolioSnapshotInput): Promise<void>;
+  /** Connectivity check; NoOp always returns true. */
+  ping(): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -228,6 +230,16 @@ export class PostgresAuditWriter implements AuditWriter {
     await this.query(text, values, 'writePortfolioSnapshot');
   }
 
+  async ping(): Promise<boolean> {
+    try {
+      await this.pool.query('SELECT 1');
+      return true;
+    } catch (err) {
+      this.logger.error('PostgresAuditWriter ping failed', { err: String(err) });
+      return false;
+    }
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -257,6 +269,10 @@ export class NoOpAuditWriter implements AuditWriter {
   async writeRiskDecision(_decision: AuditRiskDecisionInput): Promise<void> {}
 
   async writePortfolioSnapshot(_snapshot: AuditPortfolioSnapshotInput): Promise<void> {}
+
+  async ping(): Promise<boolean> {
+    return true;
+  }
 
   async close(): Promise<void> {}
 }

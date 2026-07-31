@@ -108,6 +108,10 @@ pnpm --filter @optarb/persistence migrate  # apply Postgres migrations (needs PE
 - **Суб-агенты**: встроенные `explore` (read-only исследование), `plan` (планирование), `coder` (реализация). Пользовательских суб-агентов kimi-code не поддерживает — расширение делается скиллами
 - `.kimi-code/local.toml` — локальный конфиг, в `.gitignore`, не коммитить
 
+## Roadmap
+
+14. ✅ Production readiness: CI/CD, rotating capture, health endpoint, Docker image
+
 ## Чек-лист перед завершением задачи
 
 1. `pnpm test` и `pnpm lint` зелёные (когда scaffolding будет готов)
