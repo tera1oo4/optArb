@@ -1,6 +1,5 @@
 import type { Decimal, Logger } from '@optarb/core';
-import type { FeeSchedules } from '@optarb/execution';
-import type { PortfolioSnapshot } from '@optarb/execution';
+import type { FeeSchedules, OrderAttempt, PaperFill, PortfolioSnapshot } from '@optarb/execution';
 import type { CrossVenueDetectorConfig } from '@optarb/signals';
 import type { RiskConfig } from '@optarb/risk';
 
@@ -21,6 +20,20 @@ export interface BacktestOptions {
   scanIntervalMs?: number;
   /** Optional logger; defaults to pino info. */
   logger?: Logger;
+  /** Capture the full trade log (fills, risk decisions, snapshots) for analytics (M10). */
+  captureTradeLog?: boolean;
+}
+
+export interface BacktestTradeLog {
+  fills: PaperFill[];
+  orders: OrderAttempt[];
+  riskDecisions: Array<{
+    signalId: string;
+    allowed: boolean;
+    reasons: string[];
+    checkedAtMs: number;
+  }>;
+  portfolioSnapshots: Array<PortfolioSnapshot & { tsMs: number }>;
 }
 
 export interface BacktestResult {
@@ -36,4 +49,5 @@ export interface BacktestResult {
   fees: Decimal;
   netPnl: Decimal;
   durationMs: number;
+  tradeLog?: BacktestTradeLog;
 }

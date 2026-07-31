@@ -34,8 +34,10 @@ packages/risk             — pre-trade risk engine: limits, quote freshness, ed
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
 packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
 packages/backtest-engine  — deterministic replay: marketdata → signals → risk → paper execution → PnL report
+packages/analytics        — performance analytics: hit-rate, PnL curves, per-detector/per-venue attribution from audit/trade-log data
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
 apps/backtest             — thin CLI over packages/backtest-engine (multi-venue replay)
+apps/analytics            — CLI for Postgres-backed performance reports
 apps/trader               — paper-режим: consolidated view + cross-venue сигналы (ордеров НЕТ)
 ```
 
@@ -50,6 +52,7 @@ pnpm format             # prettier --write
 pnpm dev:collector      # сбор рыночных данных + capture (env: VENUES=deribit,bybit,okx,binance,polymarket)
 pnpm dev:trader         # paper-режим: consolidated view + cross-venue сигналы
 pnpm backtest <file>    # replay capture-файла
+pnpm analytics --from 2026-07-01 --to 2026-07-08 --output json|csv|table  # Postgres-backed performance report
 pnpm --filter @optarb/persistence migrate  # apply Postgres migrations (needs PERSIST_POSTGRES_URL)
 ```
 

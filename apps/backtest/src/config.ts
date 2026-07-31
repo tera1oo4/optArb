@@ -30,6 +30,9 @@ const EnvSchema = z
     /** Paper execution limits (ADR-0006) */
     PAPER_MAX_NOTIONAL_USD: z.coerce.number().positive().default(10_000),
 
+    /** Compute and print analytics report after the backtest run (M10) */
+    BACKTEST_ANALYTICS: z.coerce.boolean().default(false),
+
     /** Optional per-venue fee overrides for paper PnL (fractions, e.g. 0.0003) */
     PAPER_FEE_DERIBIT_TAKER_RATE: decimalString.optional(),
     PAPER_FEE_DERIBIT_CAP_FRACTION: decimalString.optional(),

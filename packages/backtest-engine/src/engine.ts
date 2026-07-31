@@ -8,6 +8,7 @@ import {
   type RawCapture,
 } from '@optarb/core';
 import { PaperExecutor } from '@optarb/execution';
+import type { OrderAttempt, PaperFill, PortfolioSnapshot } from '@optarb/execution';
 import { MarketDataStore } from '@optarb/marketdata';
 import { readCapture } from '@optarb/persistence';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
@@ -66,6 +67,20 @@ export class BacktestEngine {
 
     const executedSignalKeys = new Set<string>();
 
+    const tradeLog = options.captureTradeLog
+      ? {
+          fills: [] as PaperFill[],
+          orders: [] as OrderAttempt[],
+          riskDecisions: [] as Array<{
+            signalId: string;
+            allowed: boolean;
+            reasons: string[];
+            checkedAtMs: number;
+          }>,
+          portfolioSnapshots: [] as Array<PortfolioSnapshot & { tsMs: number }>,
+        }
+      : undefined;
+
     // Process capture entries grouped by timestamp so a scan sees the full
     // state of each capture-time instant.
     const pendingBucket: RawCapture[] = [];
@@ -113,12 +128,13 @@ export class BacktestEngine {
           (seen) => (signalsSeen += seen),
           (rejects) => (riskRejects += rejects),
           (newFills) => (fills += newFills),
+          tradeLog,
         );
         lastScanMs = bucketTsMs;
       }
 
       if (bucketTsMs - lastReportMs >= options.reportIntervalMs) {
-        this.reportSnapshot(store, executor, bucketTsMs);
+        this.reportSnapshot(store, executor, bucketTsMs, tradeLog);
         lastReportMs = bucketTsMs;
       }
     };
@@ -151,6 +167,7 @@ export class BacktestEngine {
         (seen) => (signalsSeen += seen),
         (rejects) => (riskRejects += rejects),
         (newFills) => (fills += newFills),
+        tradeLog,
       );
     }
 
@@ -170,6 +187,7 @@ export class BacktestEngine {
       fees: snapshot.feesPaidUsd,
       netPnl: snapshot.netPnlUsd,
       durationMs: firstTsMs === null ? 0 : lastTsMs - firstTsMs,
+      ...(tradeLog ? { tradeLog } : {}),
     };
   }
 
@@ -196,6 +214,17 @@ export class BacktestEngine {
     addSignals: (n: number) => void,
     addRejects: (n: number) => void,
     addFills: (n: number) => void,
+    tradeLog?: {
+      fills: PaperFill[];
+      orders: OrderAttempt[];
+      riskDecisions: Array<{
+        signalId: string;
+        allowed: boolean;
+        reasons: string[];
+        checkedAtMs: number;
+      }>;
+      portfolioSnapshots: Array<PortfolioSnapshot & { tsMs: number }>;
+    },
   ): Promise<void> {
     const views = store.views();
     const signals = detector.detect(views, nowMs);
@@ -215,6 +244,12 @@ export class BacktestEngine {
       const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {
         addRejects(1);
+        tradeLog?.riskDecisions.push({
+          signalId: intent.signalId,
+          allowed: false,
+          reasons: riskResult.reasons,
+          checkedAtMs: nowMs,
+        });
         this.log.debug('backtest: risk check denied intent', {
           signalId: intent.signalId,
           reasons: riskResult.reasons,
@@ -226,6 +261,7 @@ export class BacktestEngine {
       if (outcome.status === 'executed') {
         executedKeys.add(dedupKey);
         addFills(outcome.result.fills.length);
+        tradeLog?.fills.push(...outcome.result.fills);
         this.log.debug('backtest: paper execution', {
           signalId: intent.signalId,
           grossEdgeUsd: outcome.result.grossEdgeUsd.toString(),
@@ -242,8 +278,24 @@ export class BacktestEngine {
     }
   }
 
-  private reportSnapshot(store: MarketDataStore, executor: PaperExecutor, tsMs: number): void {
+  private reportSnapshot(
+    store: MarketDataStore,
+    executor: PaperExecutor,
+    tsMs: number,
+    tradeLog?: {
+      fills: PaperFill[];
+      orders: OrderAttempt[];
+      riskDecisions: Array<{
+        signalId: string;
+        allowed: boolean;
+        reasons: string[];
+        checkedAtMs: number;
+      }>;
+      portfolioSnapshots: Array<PortfolioSnapshot & { tsMs: number }>;
+    },
+  ): void {
     const snap = executor.portfolio.snapshot(store.views());
+    tradeLog?.portfolioSnapshots.push({ ...snap, tsMs });
     this.log.info('backtest: portfolio snapshot', {
       tsMs,
       openPositions: snap.openPositions,

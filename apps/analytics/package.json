@@ -1,5 +1,5 @@
 {
-  "name": "@optarb/backtest",
+  "name": "@optarb/analytics-cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,10 +8,7 @@
   },
   "dependencies": {
     "@optarb/analytics": "workspace:*",
-    "@optarb/backtest-engine": "workspace:*",
     "@optarb/core": "workspace:*",
-    "@optarb/execution": "workspace:*",
-    "@optarb/risk": "workspace:*",
     "dotenv": "^16.4.7",
     "pino": "^9.6.0",
     "zod": "^3.24.1"

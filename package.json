@@ -10,6 +10,7 @@
   "scripts": {
     "dev:collector": "pnpm --filter @optarb/collector dev",
     "backtest": "pnpm --filter @optarb/backtest start",
+    "analytics": "pnpm --filter @optarb/analytics-cli start",
     "test": "vitest run",
     "typecheck": "pnpm -r exec tsc --noEmit -p tsconfig.json",
     "lint": "pnpm typecheck && prettier --check \"**/*.{ts,json,yaml,yml}\"",

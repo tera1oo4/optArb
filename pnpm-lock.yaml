@@ -24,8 +24,39 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@24.13.3)(tsx@4.23.0)
 
+  apps/analytics:
+    dependencies:
+      '@optarb/analytics':
+        specifier: workspace:*
+        version: link:../../packages/analytics
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      pino:
+        specifier: ^9.6.0
+        version: 9.14.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   apps/backtest:
     dependencies:
+      '@optarb/analytics':
+        specifier: workspace:*
+        version: link:../../packages/analytics
       '@optarb/backtest-engine':
         specifier: workspace:*
         version: link:../../packages/backtest-engine
@@ -128,6 +159,31 @@ importers:
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/analytics:
+    dependencies:
+      '@optarb/core':
+        specifier: workspace:*
+        version: link:../core
+      '@optarb/execution':
+        specifier: workspace:*
+        version: link:../execution
+      '@optarb/persistence':
+        specifier: workspace:*
+        version: link:../persistence
+      pg:
+        specifier: ^8.14.1
+        version: 8.22.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      '@types/pg':
+        specifier: ^8.11.11
+        version: 8.20.0
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

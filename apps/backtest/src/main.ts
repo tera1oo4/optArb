@@ -3,6 +3,11 @@ import { resolve } from 'node:path';
 import pino from 'pino';
 import { dec, type Logger } from '@optarb/core';
 import type { Venue } from '@optarb/core';
+import {
+  AnalyticsEngine,
+  formatReport as formatAnalyticsReport,
+  InMemoryTradeLog,
+} from '@optarb/analytics';
 import { BacktestEngine, formatReport } from '@optarb/backtest-engine';
 import { resolveFeeSchedules } from '@optarb/execution';
 import { loadConfig } from './config.js';
@@ -72,10 +77,23 @@ async function main(): Promise<void> {
     paperMaxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
     reportIntervalMs: cfg.PAPER_REPORT_INTERVAL_MS,
     scanIntervalMs: cfg.SCAN_INTERVAL_MS,
+    captureTradeLog: cfg.BACKTEST_ANALYTICS,
   });
 
   log.info({ file }, 'backtest finished');
   console.log(formatReport(result));
+
+  if (cfg.BACKTEST_ANALYTICS && result.tradeLog) {
+    const log = new InMemoryTradeLog({
+      fills: result.tradeLog.fills,
+      orders: result.tradeLog.orders,
+      riskDecisions: result.tradeLog.riskDecisions,
+      portfolioSnapshots: result.tradeLog.portfolioSnapshots,
+    });
+    const analytics = new AnalyticsEngine(log);
+    const analyticsReport = await analytics.computeReport();
+    console.log('\n' + formatAnalyticsReport(analyticsReport));
+  }
 }
 
 main().catch((err: unknown) => {
