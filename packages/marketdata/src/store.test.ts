@@ -132,6 +132,45 @@ describe('MarketDataStore', () => {
     expect(q.bidSizeCoin?.toString()).toBe('3');
   });
 
+  it('drops out-of-order updates so stale prices do not overwrite fresh ones', () => {
+    const store = new MarketDataStore();
+    const inst = makeInst('deribit', 'BTC-12JUL26-63000-C');
+    store.registerInstrument(inst);
+
+    store.applyTicker({
+      venue: 'deribit',
+      instrumentId: inst.id,
+      tsMs: 1000,
+      recvMs: 1000,
+      markPrice: null,
+      indexPrice: dec('64000'),
+      markIv: null,
+      greeks: null,
+      bestBid: dec('0.020'),
+      bestAsk: dec('0.022'),
+      quoteCurrency: 'BTC',
+    });
+
+    // Older tick must be ignored.
+    store.applyTicker({
+      venue: 'deribit',
+      instrumentId: inst.id,
+      tsMs: 900,
+      recvMs: 1100, // recvMs is newer, but tsMs is older
+      markPrice: null,
+      indexPrice: dec('64000'),
+      markIv: null,
+      greeks: null,
+      bestBid: dec('0.010'),
+      bestAsk: dec('0.012'),
+      quoteCurrency: 'BTC',
+    });
+
+    const q = store.getView('BTC:1783843200000:63000:call')!.quotes.get('deribit')!;
+    expect(q.bidUsd?.toString()).toBe('1280'); // 0.020 * 64000
+    expect(q.tsMs).toBe(1000);
+  });
+
   it('keeps binary (Polymarket) instruments in a separate key namespace', () => {
     const store = new MarketDataStore();
     const expiryMs = Date.UTC(2026, 6, 12, 16, 0, 0, 0);

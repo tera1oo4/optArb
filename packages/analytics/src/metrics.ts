@@ -90,7 +90,8 @@ function computeMaxDrawdown(snapshots: PortfolioSnapshotRecord[]): Decimal {
   return maxDd;
 }
 
-function computeSharpe(perTradePnls: Decimal[]): Decimal | null {
+/** Per-trade mean / std (population std, no annualization, no risk-free rate). */
+function computePerTradeRatio(perTradePnls: Decimal[]): Decimal | null {
   if (perTradePnls.length === 0) return null;
   const n = dec(perTradePnls.length);
   let sum = dec(0);
@@ -165,7 +166,7 @@ export function computeReport(input: MetricInput): Report {
   const avgEdgeAfterFeesBps = edgeCount > 0 ? edgeSum.div(edgeCount) : null;
 
   const maxDrawdown = computeMaxDrawdown(snapshots);
-  const sharpe = computeSharpe(perTradePnls);
+  const perTradeRatio = computePerTradeRatio(perTradePnls);
 
   const perVenue: Partial<Record<Venue, VenueMetrics>> = {};
   for (const fill of fills) {
@@ -275,7 +276,7 @@ export function computeReport(input: MetricInput): Report {
     winRate,
     avgEdgeAfterFeesBps,
     maxDrawdown,
-    sharpe,
+    perTradeRatio,
     perVenue,
     perUnderlying,
     perDetector,

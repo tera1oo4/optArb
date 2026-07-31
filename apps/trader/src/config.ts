@@ -1,20 +1,8 @@
 import { z } from 'zod';
+import { decimalString } from '@optarb/core';
 import { RiskConfigSchema } from '@optarb/risk';
 
 const VenueEnum = z.enum(['deribit', 'bybit', 'okx', 'binance', 'polymarket']);
-
-const decimalString = z.string().refine(
-  (s) => {
-    try {
-      // eslint-disable-next-line no-new
-      new globalThis.Number(s);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  { message: 'must be a decimal number string' },
-);
 
 const EnvSchema = z
   .object({

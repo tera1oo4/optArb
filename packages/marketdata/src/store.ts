@@ -133,21 +133,23 @@ export class MarketDataStore {
   applyTicker(t: TickerUpdate): boolean {
     const q = this.quoteFor(t.instrumentId);
     if (!q) return false;
+    // Drop out-of-order ticks to prevent stale prices with fresh recvMs.
+    if (t.tsMs < q.tsMs) return false;
     if (t.bestBid !== null) q.bid = t.bestBid;
     if (t.bestAsk !== null) q.ask = t.bestAsk;
     if (t.markPrice !== null) q.mark = t.markPrice;
     if (t.markIv !== null) q.markIv = t.markIv;
     if (t.indexPrice !== null) q.indexPriceUsd = t.indexPrice;
-    if (t.tsMs >= q.tsMs) {
-      q.tsMs = t.tsMs;
-      q.recvMs = t.recvMs;
-    }
+    q.tsMs = t.tsMs;
+    q.recvMs = t.recvMs;
     return true;
   }
 
   applyBook(b: BookUpdate): boolean {
     const q = this.quoteFor(b.instrumentId);
     if (!q) return false;
+    // Drop out-of-order book updates to prevent stale prices with fresh recvMs.
+    if (b.tsMs < q.tsMs) return false;
     const topBid = b.bids[0];
     const topAsk = b.asks[0];
     if (topBid) {
@@ -158,10 +160,8 @@ export class MarketDataStore {
       q.ask = topAsk.price;
       q.askSizeContracts = topAsk.size;
     }
-    if (b.tsMs >= q.tsMs) {
-      q.tsMs = b.tsMs;
-      q.recvMs = b.recvMs;
-    }
+    q.tsMs = b.tsMs;
+    q.recvMs = b.recvMs;
     return true;
   }
 

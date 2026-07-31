@@ -40,6 +40,7 @@ import {
   type RedisPortfolioSnapshot,
 } from '@optarb/persistence';
 import { loadConfig } from './config.js';
+import { createDailyRealizedPnlTracker } from './daily-pnl.js';
 import { SignalTracker } from './signal-tracker.js';
 import { createRuntimeKillSwitch } from './runtime-kill-switch.js';
 
@@ -617,7 +618,9 @@ async function main(): Promise<void> {
   const seenKeys = new Set<string>();
   const seenDigitalKeys = new Set<string>();
   const seenYesNoKeys = new Set<string>();
-  const dailyRealizedPnlBaseline = executor.portfolio.snapshot(store.views()).realizedPnlUsd;
+  const dailyRealizedPnl = createDailyRealizedPnlTracker(
+    executor.portfolio.snapshot(store.views()).realizedPnlUsd,
+  );
   const scanTimer = setInterval(async () => {
     const nowMs = clock.nowMs();
     lastScanTs = nowMs;
@@ -654,7 +657,7 @@ async function main(): Promise<void> {
       if (!intent) continue;
 
       const snapshot = executor.portfolio.snapshot(store.views());
-      const dailyRealizedPnlUsd = snapshot.realizedPnlUsd.sub(dailyRealizedPnlBaseline);
+      const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
       const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
       const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {
@@ -724,7 +727,7 @@ async function main(): Promise<void> {
       const intent = yesNoParityIntent(s, store);
       if (!intent) continue;
       const snapshot = executor.portfolio.snapshot(store.views());
-      const dailyRealizedPnlUsd = snapshot.realizedPnlUsd.sub(dailyRealizedPnlBaseline);
+      const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
       const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
       const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {

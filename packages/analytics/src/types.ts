@@ -86,7 +86,8 @@ export interface Report {
   winRate: Decimal | null;
   avgEdgeAfterFeesBps: Decimal | null;
   maxDrawdown: Decimal;
-  sharpe: Decimal | null;
+  /** Per-trade mean/std ratio (NOT annualized Sharpe). */
+  perTradeRatio: Decimal | null;
   perVenue: Partial<Record<Venue, VenueMetrics>>;
   perUnderlying: Partial<Record<Underlying, UnderlyingMetrics>>;
   perDetector: Record<string, DetectorMetrics>;

@@ -142,4 +142,26 @@ describe('PaperPortfolio', () => {
     expect(snap.grossNotionalUsd.toFixed(2)).toBe('1000.00');
     expect(snap.unrealizedPnlUsd.toFixed(2)).toBe('0.00');
   });
+
+  it('keeps closed positions in the snapshot and attributes realized PnL to venue/underlying', () => {
+    const pf = new PaperPortfolio();
+    pf.applyFill(fill('deribit', 'deribit:BTC-OPT', 'buy', '1000', '1', '10'));
+    pf.applyFill(fill('deribit', 'deribit:BTC-OPT', 'sell', '1200', '1', '20'));
+
+    const pos = pf.getPosition('deribit', 'deribit:BTC-OPT')!;
+    expect(pos.qty.isZero()).toBe(true);
+
+    const snap = pf.snapshot([viewFor('deribit:BTC-OPT', '1100', '1200')]);
+    const report = snap.positions.find((p) => p.instrumentId === 'deribit:BTC-OPT')!;
+    expect(report.qty.isZero()).toBe(true);
+    expect(report.realizedPnlUsd.toFixed(2)).toBe('200.00');
+
+    expect(snap.openPositions).toBe(0);
+    expect(snap.grossNotionalUsd.toFixed(2)).toBe('0.00');
+    expect(snap.realizedPnlUsd.toFixed(2)).toBe('200.00');
+
+    const venueAgg = snap.perVenue.find((v) => v.key === 'deribit')!;
+    expect(venueAgg.notionalUsd.toFixed(2)).toBe('0.00');
+    expect(venueAgg.pnlUsd.toFixed(2)).toBe('170.00'); // realized 200 - fees 30
+  });
 });

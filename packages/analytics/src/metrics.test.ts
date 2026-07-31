@@ -17,7 +17,7 @@ describe('computeReport', () => {
     expect(report.winRate).toBeNull();
     expect(report.avgEdgeAfterFeesBps).toBeNull();
     expect(report.maxDrawdown.toNumber()).toBe(0);
-    expect(report.sharpe).toBeNull();
+    expect(report.perTradeRatio).toBeNull();
     expect(report.horizonHitRate).toBeNull();
   });
 
@@ -95,7 +95,7 @@ describe('computeReport', () => {
     expect(report.maxDrawdown.toNumber()).toBe(50); // peak 100 -> trough 50
   });
 
-  it('returns sharpe null when all per-trade PnLs are equal (zero std)', () => {
+  it('returns perTradeRatio null when all per-trade PnLs are equal (zero std)', () => {
     const fills = [
       ...[1, 2, 3].flatMap((i) => [
         makeFill(`s${i}`, 'deribit', 'buy', 8_000, 1, 0),
@@ -103,10 +103,10 @@ describe('computeReport', () => {
       ]),
     ];
     const report = computeReport({ orders: [], fills, decisions: [], snapshots: [] });
-    expect(report.sharpe).toBeNull();
+    expect(report.perTradeRatio).toBeNull();
   });
 
-  it('computes positive sharpe for winning trades', () => {
+  it('computes positive perTradeRatio for winning trades', () => {
     const fills = [
       makeFill('s1', 'deribit', 'buy', 8_000, 1, 5),
       makeFill('s1', 'bybit', 'sell', 8_500, 1, 5),
@@ -114,8 +114,8 @@ describe('computeReport', () => {
       makeFill('s2', 'bybit', 'sell', 7_600, 1, 5),
     ];
     const report = computeReport({ orders: [], fills, decisions: [], snapshots: [] });
-    expect(report.sharpe).not.toBeNull();
-    expect(report.sharpe!.gt(0)).toBe(true);
+    expect(report.perTradeRatio).not.toBeNull();
+    expect(report.perTradeRatio!.gt(0)).toBe(true);
   });
 
   it('counts risk rejects and computes reject rate', () => {

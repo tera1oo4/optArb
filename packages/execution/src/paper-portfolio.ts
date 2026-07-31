@@ -142,18 +142,17 @@ export class PaperPortfolio {
     let realizedPnlUsd = dec(0);
     let unrealizedPnlUsd = dec(0);
     let feesPaidUsd = dec(0);
+    let openPositions = 0;
 
     for (const pos of this.positions.values()) {
       realizedPnlUsd = realizedPnlUsd.add(pos.realizedPnlUsd);
       feesPaidUsd = feesPaidUsd.add(pos.feesPaidUsd);
-      if (pos.qty.isZero()) continue;
 
       // Fallback chain: view mid → venue mark → last fill price.
       const markUsd = marks.get(pos.instrumentId) ?? pos.lastFillPriceUsd;
       const notionalUsd = pos.qty.abs().mul(markUsd);
       const upnl = pos.qty.mul(markUsd.sub(pos.avgEntryUsd));
       unrealizedPnlUsd = unrealizedPnlUsd.add(upnl);
-      grossNotionalUsd = grossNotionalUsd.add(notionalUsd);
 
       reports.push({
         venue: pos.venue,
@@ -169,6 +168,13 @@ export class PaperPortfolio {
         feesPaidUsd: pos.feesPaidUsd,
       });
 
+      if (!pos.qty.isZero()) {
+        openPositions++;
+        grossNotionalUsd = grossNotionalUsd.add(notionalUsd);
+      }
+
+      // Aggregate exposure/PnL attribution for ALL positions, including closed
+      // ones, so realized PnL is not lost from per-venue/underlying breakdowns.
       for (const [map, key] of [
         [perVenue, pos.venue],
         [perUnderlying, pos.underlying],
@@ -184,7 +190,7 @@ export class PaperPortfolio {
       positions: reports,
       perVenue: [...perVenue.values()],
       perUnderlying: [...perUnderlying.values()],
-      openPositions: reports.length,
+      openPositions,
       grossNotionalUsd,
       realizedPnlUsd,
       unrealizedPnlUsd,

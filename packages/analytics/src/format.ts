@@ -47,7 +47,7 @@ export function formatReport(report: Report): string {
   lines.push(`Win rate:             ${fmtPct(report.winRate)}`);
   lines.push(`Avg edge after fees:  ${fmtBps(report.avgEdgeAfterFeesBps)}`);
   lines.push(`Max drawdown:         ${fmtMoney(report.maxDrawdown)} USD`);
-  lines.push(`Sharpe:               ${fmtRatio(report.sharpe)}`);
+  lines.push(`Per-trade ratio:      ${fmtRatio(report.perTradeRatio)}`);
   lines.push(`Horizon hit rate:     ${fmtPct(report.horizonHitRate)}`);
   lines.push('');
 
@@ -153,7 +153,7 @@ export function reportToCsv(report: Report): string {
   rows.push(csvRow(['summary', 'winRate', fmtPct(report.winRate)]));
   rows.push(csvRow(['summary', 'avgEdgeAfterFeesBps', fmtBps(report.avgEdgeAfterFeesBps)]));
   rows.push(csvRow(['summary', 'maxDrawdown', fmtMoney(report.maxDrawdown)]));
-  rows.push(csvRow(['summary', 'sharpe', fmtRatio(report.sharpe)]));
+  rows.push(csvRow(['summary', 'perTradeRatio', fmtRatio(report.perTradeRatio)]));
   rows.push(csvRow(['summary', 'horizonHitRate', fmtPct(report.horizonHitRate)]));
 
   for (const [venue, m] of Object.entries(report.perVenue)) {
@@ -212,7 +212,7 @@ const COMPARABLE_METRICS = [
   'winRate',
   'avgEdgeAfterFeesBps',
   'maxDrawdown',
-  'sharpe',
+  'perTradeRatio',
   'horizonHitRate',
 ] as const;
 
@@ -238,8 +238,8 @@ function metricValue(report: Report, key: ComparableMetric): Decimal | null {
       return report.avgEdgeAfterFeesBps;
     case 'maxDrawdown':
       return report.maxDrawdown;
-    case 'sharpe':
-      return report.sharpe;
+    case 'perTradeRatio':
+      return report.perTradeRatio;
     case 'horizonHitRate':
       return report.horizonHitRate;
     default:
@@ -278,7 +278,7 @@ export function formatComparison(comparison: Comparison): string {
     const av = metricValue(comparison.a, metricKey);
     const bv = metricValue(comparison.b, metricKey);
     const fmt =
-      key.toLowerCase().includes('rate') || key.toLowerCase().includes('sharpe')
+      key.toLowerCase().includes('rate') || key.toLowerCase().includes('pertraderatio')
         ? fmtRatio
         : fmtMoney;
     lines.push(
@@ -341,7 +341,7 @@ export function reportToJson(report: Report): unknown {
     winRate: serializeDecimal(report.winRate),
     avgEdgeAfterFeesBps: serializeDecimal(report.avgEdgeAfterFeesBps),
     maxDrawdown: serializeDecimal(report.maxDrawdown),
-    sharpe: serializeDecimal(report.sharpe),
+    perTradeRatio: serializeDecimal(report.perTradeRatio),
     perVenue: Object.fromEntries(
       Object.entries(report.perVenue).map(([k, m]) => [k, serializeVenueMetrics(m)]),
     ),
