@@ -138,7 +138,7 @@ export class PolymarketConnector extends BaseWsConnector implements VenueConnect
   private instrumentsFromMarket(m: {
     question: string;
     conditionId: string;
-    endDate: string;
+    endDate?: string;
     outcomes: string;
     clobTokenIds: string;
   }): Instrument[] {
@@ -150,6 +150,7 @@ export class PolymarketConnector extends BaseWsConnector implements VenueConnect
     const outcomes = parseGammaStringArray(m.outcomes);
     if (!tokenIds || !outcomes || tokenIds.length !== outcomes.length) return [];
 
+    if (!m.endDate) return [];
     const expiryMs = Date.parse(m.endDate);
     if (Number.isNaN(expiryMs)) return [];
 

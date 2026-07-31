@@ -113,6 +113,13 @@ const EnvSchema = z
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     STATS_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
 
+    /** Digital-vs-vanilla detector (M3 / B wiring). */
+    DIGITAL_MIN_DEVIATION: decimalString.default('0.03'),
+    DIGITAL_RATE: decimalString.default('0.05'),
+
+    /** YES/NO parity detector (M3 / B wiring). */
+    YESNO_THRESHOLD: decimalString.default('0.02'),
+
     /** Optional Postgres audit persistence (ADR-0005). If unset, trader runs without audit. */
     PERSIST_POSTGRES_URL: z.string().url().optional(),
 

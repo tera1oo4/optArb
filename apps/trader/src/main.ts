@@ -22,7 +22,14 @@ import {
 } from '@optarb/execution';
 import { MarketDataStore, type InstrumentView, type VenueQuote } from '@optarb/marketdata';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
-import { CrossVenueDetector, type CrossVenueSignal } from '@optarb/signals';
+import {
+  CrossVenueDetector,
+  DigitalVsVanillaDetector,
+  YesNoParityDetector,
+  type CrossVenueSignal,
+  type DigitalVsVanillaSignal,
+  type YesNoParitySignal,
+} from '@optarb/signals';
 import { createVenueConnector, type VenueRuntimeConfigs } from '@optarb/venues';
 import {
   createAuditWriter,
@@ -172,6 +179,98 @@ function logSignal(log: pino.Logger, s: CrossVenueSignal, level: 'info' | 'debug
     },
     'cross-venue arb signal',
   );
+}
+
+function logDigitalSignal(log: pino.Logger, s: DigitalVsVanillaSignal): void {
+  log.info(
+    {
+      signal: s.kind,
+      key: s.key,
+      vanillaKey: s.vanillaKey,
+      vanillaVenue: s.vanillaVenue,
+      polymarketPrice: s.polymarketPrice.toFixed(4),
+      modelPrice: s.modelPrice.toFixed(4),
+      edge: s.edge.toFixed(4),
+      forwardUsd: s.forwardUsd.toString(),
+      vol: s.vol.toFixed(4),
+    },
+    'digital-vs-vanilla signal (observational; no paper execution)',
+  );
+}
+
+function logYesNoSignal(log: pino.Logger, s: YesNoParitySignal): void {
+  log.info(
+    {
+      signal: s.kind,
+      marketKey: s.marketKey,
+      direction: s.direction,
+      yesPrice: s.yesPrice.toFixed(4),
+      noPrice: s.noPrice.toFixed(4),
+      sum: s.sum.toFixed(4),
+      edge: s.edge.toFixed(4),
+    },
+    'yes-no parity signal',
+  );
+}
+
+function binaryViewKeys(marketKey: string): { yes: string; no: string } {
+  return {
+    yes: `binary:${marketKey}:call`,
+    no: `binary:${marketKey}:put`,
+  };
+}
+
+function yesNoParityIntent(
+  signal: YesNoParitySignal,
+  store: MarketDataStore,
+): ExecutionIntent | null {
+  const keys = binaryViewKeys(signal.marketKey);
+  const yesView = store.getView(keys.yes);
+  const noView = store.getView(keys.no);
+  if (!yesView || !noView) return null;
+  const yesQuote = yesView.quotes.get('polymarket');
+  const noQuote = noView.quotes.get('polymarket');
+  if (!yesQuote || !noQuote) return null;
+
+  const buyBoth = signal.direction === 'buy-both';
+  const yesPrice = buyBoth ? yesQuote.askUsd : yesQuote.bidUsd;
+  const noPrice = buyBoth ? noQuote.askUsd : noQuote.bidUsd;
+  const yesSize = buyBoth ? yesQuote.askSizeCoin : yesQuote.bidSizeCoin;
+  const noSize = buyBoth ? noQuote.askSizeCoin : noQuote.bidSizeCoin;
+  if (yesPrice === null || noPrice === null || yesSize === null || noSize === null) return null;
+
+  const sizeCoin = yesSize.lte(noSize) ? yesSize : noSize;
+  const underlying = yesView.underlying;
+  const quoteRecvMs = Math.max(yesQuote.recvMs, noQuote.recvMs);
+  return {
+    signalId: `yes-no-parity:${signal.marketKey}:${signal.direction}:${signal.tsMs}`,
+    signalKind: 'yes-no-parity',
+    legs: [
+      {
+        venue: 'polymarket',
+        instrumentId: signal.yesInstrumentId,
+        viewKey: keys.yes,
+        underlying,
+        side: buyBoth ? 'buy' : 'sell',
+        priceUsd: yesPrice,
+        sizeCoin,
+        indexPriceUsd: null,
+        quoteRecvMs,
+      },
+      {
+        venue: 'polymarket',
+        instrumentId: signal.noInstrumentId,
+        viewKey: keys.no,
+        underlying,
+        side: buyBoth ? 'buy' : 'sell',
+        priceUsd: noPrice,
+        sizeCoin,
+        indexPriceUsd: null,
+        quoteRecvMs,
+      },
+    ],
+    tsMs: signal.tsMs,
+  };
 }
 
 function outcomeLabel(outcome: ExecutionOutcome): string {
@@ -376,6 +475,15 @@ async function main(): Promise<void> {
     maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
     minSizeUsd: dec(cfg.SIGNAL_MIN_SIZE_USD),
   });
+  const digitalDetector = new DigitalVsVanillaDetector({
+    minDeviation: dec(cfg.DIGITAL_MIN_DEVIATION),
+    rate: dec(cfg.DIGITAL_RATE),
+    maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
+  });
+  const yesNoDetector = new YesNoParityDetector({
+    threshold: dec(cfg.YESNO_THRESHOLD),
+    maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
+  });
   const executor = new PaperExecutor({
     maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
     fees: resolveFeeSchedules(feeOverrides(cfg)),
@@ -502,7 +610,13 @@ async function main(): Promise<void> {
   let reportSignalCount = 0;
   let reportRiskRejectCount = 0;
   let reportFillCount = 0;
+  let digitalSignalCount = 0;
+  let reportDigitalSignalCount = 0;
+  let yesNoSignalCount = 0;
+  let reportYesNoSignalCount = 0;
   const seenKeys = new Set<string>();
+  const seenDigitalKeys = new Set<string>();
+  const seenYesNoKeys = new Set<string>();
   const dailyRealizedPnlBaseline = executor.portfolio.snapshot(store.views()).realizedPnlUsd;
   const scanTimer = setInterval(async () => {
     const nowMs = clock.nowMs();
@@ -584,6 +698,73 @@ async function main(): Promise<void> {
         );
       }
     }
+
+    const digitalSignals = digitalDetector.detect(views, nowMs);
+    for (const s of digitalSignals) {
+      digitalSignalCount++;
+      reportDigitalSignalCount++;
+      const dedupeKey = `${s.key}:${s.vanillaVenue}`;
+      const first = !seenDigitalKeys.has(dedupeKey);
+      seenDigitalKeys.add(dedupeKey);
+      if (first) logDigitalSignal(log, s);
+      // Observational only: hedging a Polymarket digital with vanilla options
+      // requires a call-spread replication book that is not modelled yet.
+    }
+
+    const yesNoSignals = yesNoDetector.detect(views, nowMs);
+    for (const s of yesNoSignals) {
+      yesNoSignalCount++;
+      reportYesNoSignalCount++;
+      const dedupeKey = `${s.marketKey}:${s.direction}`;
+      const first = !seenYesNoKeys.has(dedupeKey);
+      seenYesNoKeys.add(dedupeKey);
+      logYesNoSignal(log, s);
+      if (!first) continue;
+
+      const intent = yesNoParityIntent(s, store);
+      if (!intent) continue;
+      const snapshot = executor.portfolio.snapshot(store.views());
+      const dailyRealizedPnlUsd = snapshot.realizedPnlUsd.sub(dailyRealizedPnlBaseline);
+      const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
+      const riskResult = await riskEngine.check(intent, riskState, nowMs);
+      if (!riskResult.allowed) {
+        riskRejectCount += 1;
+        reportRiskRejectCount += 1;
+        log.warn(
+          { signalId: intent.signalId, reasons: riskResult.reasons },
+          'risk check denied intent',
+        );
+        void audit
+          .writeRiskDecision({
+            signalId: intent.signalId,
+            allowed: false,
+            reasons: riskResult.reasons,
+            checkedAt: new Date(nowMs),
+          })
+          .catch(() => {});
+        continue;
+      }
+
+      const outcome = executor.execute(intent);
+      if (outcome.status === 'executed') {
+        executedCount += 1;
+        reportFillCount += outcome.result.fills.length;
+      }
+      log.info(
+        {
+          signalId: intent.signalId,
+          outcome: outcomeLabel(outcome),
+          fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
+        },
+        'paper execution',
+      );
+      if (outcome.status === 'executed') {
+        for (const fill of outcome.result.fills) logFill(log, fill);
+        void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
+          () => {},
+        );
+      }
+    }
   }, cfg.SCAN_INTERVAL_MS);
 
   const statsTimer = setInterval(() => {
@@ -592,12 +773,18 @@ async function main(): Promise<void> {
       signals: signalCount,
       executed: executedCount,
       riskRejects: riskRejectCount,
+      digitalSignals: digitalSignalCount,
+      yesNoSignals: yesNoSignalCount,
       oms: executor.omsStats(),
     });
     signalCount = 0;
     executedCount = 0;
     riskRejectCount = 0;
+    digitalSignalCount = 0;
+    yesNoSignalCount = 0;
     seenKeys.clear();
+    seenDigitalKeys.clear();
+    seenYesNoKeys.clear();
   }, cfg.STATS_INTERVAL_MS);
 
   const reportTimer = setInterval(() => {
@@ -621,6 +808,8 @@ async function main(): Promise<void> {
       signalsSeen: reportSignalCount,
       riskRejects: reportRiskRejectCount,
       fillsCount: reportFillCount,
+      digitalSignalsSeen: reportDigitalSignalCount,
+      yesNoSignalsSeen: reportYesNoSignalCount,
       viewsCount: store.views().length,
     };
     void redisStore.publishPortfolioSnapshot(toRedisPortfolio(snap, nowMs)).catch(() => {});
@@ -636,6 +825,8 @@ async function main(): Promise<void> {
     reportSignalCount = 0;
     reportRiskRejectCount = 0;
     reportFillCount = 0;
+    reportDigitalSignalCount = 0;
+    reportYesNoSignalCount = 0;
   }, cfg.PAPER_REPORT_INTERVAL_MS);
 
   const shutdown = async (signal: string) => {

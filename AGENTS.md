@@ -38,7 +38,7 @@ packages/analytics        — performance analytics: hit-rate, PnL curves, per-d
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
 apps/backtest             — thin CLI over packages/backtest-engine (multi-venue replay)
 apps/analytics            — CLI for Postgres-backed performance reports
-apps/trader               — paper-режим: consolidated view + cross-venue сигналы (ордеров НЕТ)
+apps/trader               — paper-режим: consolidated view + cross-venue сигналы + Polymarket digital/parity detectors (ордеров НЕТ)
 ```
 
 ## Команды

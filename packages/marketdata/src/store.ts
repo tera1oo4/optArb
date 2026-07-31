@@ -193,6 +193,7 @@ export class MarketDataStore {
   private quoteFor(instrumentId: string): MutableQuote | undefined {
     const inst = this.instruments.get(instrumentId);
     if (!inst || (inst.kind !== 'option' && inst.kind !== 'binary')) return undefined;
+    if (inst.expiryMs === null || inst.strike === null || !inst.optionType) return undefined;
     const key = viewKeyOf(inst);
     return this.viewsByKey.get(key)?.quotes.get(inst.venue);
   }

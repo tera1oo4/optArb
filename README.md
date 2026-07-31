@@ -64,6 +64,8 @@
 10. ✅ Postgres audit persistence + docker-compose (optional, SSOT for fills/positions/risk decisions)
 11. ✅ Redis hot state + runtime kill switch: `RedisStateStore` in `@optarb/persistence`, `RuntimeKillSwitch` in `apps/trader`, per-venue-ready interface
 12. ✅ OMS two-legged state machine + leg-risk control (paper-only): `OmsEngine`, `PaperOrderSimulator`, `OMS_ENABLED` knob in `apps/trader`
+13. ✅ Production readiness: CI/CD, rotating JSONL capture, health endpoint, Docker image
+14. ✅ Подключены Polymarket digital-детекторы (`digital-vs-vanilla`, `YES/NO-parity`) к `apps/trader`
 13. ✅ Analytics & reporting: hit-rate, PnL curves, per-detector/per-venue attribution from audit data
 14. ✅ Production readiness: CI/CD, rotating capture, health endpoint, Docker image
 

@@ -12,7 +12,7 @@ export const GammaMarketSchema = z
     question: z.string(),
     conditionId: z.string(),
     slug: z.string().optional(),
-    endDate: z.string(),
+    endDate: z.string().optional(),
     outcomes: z.string(),
     clobTokenIds: z.string(),
     active: z.boolean().optional(),

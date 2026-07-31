@@ -51,6 +51,8 @@ export interface MetricsSnapshot {
   riskRejects: number;
   fillsCount: number;
   viewsCount?: number;
+  digitalSignalsSeen?: number;
+  yesNoSignalsSeen?: number;
 }
 
 /** Venue connectivity and discovery summary published by the collector. */
