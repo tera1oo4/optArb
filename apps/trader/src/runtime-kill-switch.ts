@@ -1,4 +1,4 @@
-import type { Venue } from '@optarb/core';
+import type { Logger, Venue } from '@optarb/core';
 import type { RedisStateStore } from '@optarb/persistence';
 
 /**
@@ -22,28 +22,36 @@ export class RuntimeKillSwitch implements KillSwitch {
     private readonly store: RedisStateStore,
     private readonly envActive: boolean,
     private readonly hasRedis: boolean,
+    private readonly logger?: Logger,
   ) {}
 
   async isActive(scope?: { venue?: Venue }): Promise<boolean> {
-    if (scope?.venue) {
-      // Per-venue kill switch is reserved for a future milestone.
-      return false;
+    try {
+      if (scope?.venue) {
+        // Per-venue kill switch is reserved for a future milestone.
+        return false;
+      }
+      if (this.hasRedis) {
+        return await this.store.getKillSwitch();
+      }
+      return this.envActive;
+    } catch (err) {
+      // Fail-closed: any error reading the kill switch blocks trading.
+      this.logger?.error('kill-switch read failed; treating as active', { err: String(err) });
+      return true;
     }
-    if (this.hasRedis) {
-      return await this.store.getKillSwitch();
-    }
-    return this.envActive;
   }
 }
 
 export function createRuntimeKillSwitch(
   env: { REDIS_URL?: string; RISK_KILL_SWITCH?: string | boolean },
   store: RedisStateStore,
+  logger?: Logger,
 ): RuntimeKillSwitch {
   const hasRedis = !!env.REDIS_URL;
   const envActive =
     typeof env.RISK_KILL_SWITCH === 'boolean'
       ? env.RISK_KILL_SWITCH
       : env.RISK_KILL_SWITCH === 'true';
-  return new RuntimeKillSwitch(store, envActive, hasRedis);
+  return new RuntimeKillSwitch(store, envActive, hasRedis, logger);
 }

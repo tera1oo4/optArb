@@ -90,13 +90,35 @@ const EnvSchema = z
     PAPER_FEE_BINANCE_CAP_FRACTION: decimalString.optional(),
     PAPER_FEE_POLYMARKET_TAKER_RATE: decimalString.optional(),
 
-    /** OMS two-legged state machine (M9; still paper-only, no real orders) */
+    /** OMS two-legged state machine (M9; required when LIVE_TRADING=true) */
     OMS_ENABLED: z
       .enum(['true', 'false'])
       .default('false')
       .transform((v) => v === 'true'),
     OMS_LEG_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
     OMS_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
+
+    /** Live-trading gate (M12). When true, real orders may be sent after operator confirmation. */
+    LIVE_TRADING: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    LIVE_TRADING_CONFIRMED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+
+    /** Optional per-venue API credentials. Required only by real adapters (currently none in the stub scaffold). */
+    DERIBIT_API_KEY: z.string().optional(),
+    DERIBIT_API_SECRET: z.string().optional(),
+    BYBIT_API_KEY: z.string().optional(),
+    BYBIT_API_SECRET: z.string().optional(),
+    OKX_API_KEY: z.string().optional(),
+    OKX_API_SECRET: z.string().optional(),
+    OKX_PASSPHRASE: z.string().optional(),
+    BINANCE_API_KEY: z.string().optional(),
+    BINANCE_API_SECRET: z.string().optional(),
+    POLYMARKET_PRIVATE_KEY: z.string().optional(),
 
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
     STATS_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),

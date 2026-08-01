@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { dec, type Decimal, type Logger } from '@optarb/core';
+import type { InstrumentView } from '@optarb/marketdata';
 import { computeFeeUsd, type FeeSchedules } from './fees.js';
 import type {
   LegOrder,
@@ -81,13 +82,13 @@ export class OmsEngine {
    * retries up to `maxAttempts` using the same intent before returning the
    * final attempt.
    */
-  submit(intent: ExecutionIntent, nowMs: number): OrderAttempt {
-    let attempt = this.createAttempt(intent, nowMs, 0);
+  submit(intent: ExecutionIntent, nowMs: number, views: InstrumentView[] = []): OrderAttempt {
+    let attempt = this.createAttempt(intent, nowMs, 0, views);
     let attemptNumber = 1;
     while (isTerminalFailure(attempt.status) && attemptNumber < this.maxAttempts) {
       this.logRetry(attempt, attemptNumber);
       attemptNumber++;
-      attempt = this.createAttempt(intent, nowMs, attemptNumber - 1);
+      attempt = this.createAttempt(intent, nowMs, attemptNumber - 1, views);
     }
     return attempt;
   }
@@ -201,7 +202,12 @@ export class OmsEngine {
     this.commandSender = sender;
   }
 
-  private createAttempt(intent: ExecutionIntent, nowMs: number, retries = 0): OrderAttempt {
+  private createAttempt(
+    intent: ExecutionIntent,
+    nowMs: number,
+    retries = 0,
+    views: InstrumentView[] = [],
+  ): OrderAttempt {
     const [buyLeg, sellLeg] = intent.legs;
     const id = randomUUID();
     const attempt: OrderAttempt = {
@@ -222,8 +228,8 @@ export class OmsEngine {
     this.stats.attemptsSubmitted++;
 
     if (this.commandSender) {
-      this.commandSender.submit(attempt, 0, [], nowMs);
-      this.commandSender.submit(attempt, 1, [], nowMs);
+      this.commandSender.submit(attempt, 0, views, nowMs);
+      this.commandSender.submit(attempt, 1, views, nowMs);
     }
     this.recomputeStatus(attempt);
     return attempt;
@@ -294,17 +300,15 @@ export class OmsEngine {
   }
 
   private recomputeStatus(attempt: OrderAttempt): void {
-    // Update firstFillTsMs before deriving status.
-    for (const leg of attempt.legs) {
-      if (isFillStatus(leg.status) && attempt.firstFillTsMs === null) {
-        attempt.firstFillTsMs = attempt.createdAt;
-      }
-    }
+    // firstFillTsMs is set from the actual fill event in recordFill.
     attempt.status = deriveStatus(attempt);
   }
 
   private recordFill(attempt: OrderAttempt, legIndex: number, event: OrderEvent): void {
     if (event.kind !== 'fill' && event.kind !== 'partial_fill') return;
+    if (attempt.firstFillTsMs === null) {
+      attempt.firstFillTsMs = event.tsMs;
+    }
     const leg = attempt.legs[legIndex];
     if (!leg) return;
     const priceUsd = event.priceUsd;

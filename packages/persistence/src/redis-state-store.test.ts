@@ -188,7 +188,7 @@ describe('IoRedisStateStore', () => {
     expect(payload.instrumentCount).toBe(40);
   });
 
-  it('returns false for getKillSwitch on error and logs it', async () => {
+  it('returns true for getKillSwitch on error (fail-closed) and logs it', async () => {
     const redis = {
       async get() {
         throw new Error('redis down');
@@ -206,7 +206,7 @@ describe('IoRedisStateStore', () => {
 
     const active = await store.getKillSwitch();
 
-    expect(active).toBe(false);
+    expect(active).toBe(true);
     expect(logs.some((l) => l.msg === 'redis getKillSwitch failed')).toBe(true);
   });
 });

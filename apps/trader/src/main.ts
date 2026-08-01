@@ -13,6 +13,7 @@ import {
 } from '@optarb/core';
 import type { Server } from 'node:http';
 import {
+  OmsEngine,
   PaperExecutor,
   resolveFeeSchedules,
   type ExecutionIntent,
@@ -20,6 +21,7 @@ import {
   type PaperFill,
   type PortfolioSnapshot,
 } from '@optarb/execution';
+import { LiveOrderSender, StubOrderGateway } from '@optarb/live';
 import { MarketDataStore, type InstrumentView, type VenueQuote } from '@optarb/marketdata';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
 import {
@@ -462,11 +464,36 @@ async function main(): Promise<void> {
   const runtimeKillSwitch = createRuntimeKillSwitch(
     { REDIS_URL: cfg.REDIS_URL, RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH },
     redisStore,
+    logger,
   );
-  logger.info('trader starting in PAPER mode (no orders will be sent)', {
-    auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
-    redisEnabled: !!cfg.REDIS_URL,
-  });
+
+  if (cfg.LIVE_TRADING) {
+    log.fatal(
+      {
+        venues: cfg.VENUES,
+        maxNotionalUsd: cfg.PAPER_MAX_NOTIONAL_USD,
+        maxDailyLossUsd: cfg.RISK_MAX_DAILY_LOSS_USD,
+        confirmationVar: 'LIVE_TRADING_CONFIRMED=true',
+      },
+      'LIVE_TRADING is enabled — real orders will be sent if confirmed',
+    );
+    if (!cfg.LIVE_TRADING_CONFIRMED) {
+      log.fatal(
+        'Refusing to start in live mode: set LIVE_TRADING_CONFIRMED=true to confirm you want to send real orders',
+      );
+      process.exit(1);
+    }
+    logger.info('trader starting in LIVE mode', {
+      venues: cfg.VENUES,
+      auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
+      redisEnabled: !!cfg.REDIS_URL,
+    });
+  } else {
+    logger.info('trader starting in PAPER mode (no orders will be sent)', {
+      auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
+      redisEnabled: !!cfg.REDIS_URL,
+    });
+  }
 
   const bus = new InMemoryEventBus();
   const clock = new LiveClock();
@@ -485,19 +512,52 @@ async function main(): Promise<void> {
     threshold: dec(cfg.YESNO_THRESHOLD),
     maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
   });
-  const executor = new PaperExecutor({
-    maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
-    fees: resolveFeeSchedules(feeOverrides(cfg)),
-    oms: cfg.OMS_ENABLED
-      ? {
-          enabled: true,
-          legTimeoutMs: cfg.OMS_LEG_TIMEOUT_MS,
-          maxAttempts: cfg.OMS_MAX_ATTEMPTS,
-          slippageBps: dec(cfg.PAPER_FILL_SLIPPAGE_BPS),
-        }
-      : undefined,
-    logger,
-  });
+  const fees = resolveFeeSchedules(feeOverrides(cfg));
+  let executor: PaperExecutor;
+  if (cfg.LIVE_TRADING) {
+    if (!cfg.OMS_ENABLED) {
+      log.fatal('LIVE_TRADING=true requires OMS_ENABLED=true');
+      process.exit(1);
+    }
+    const omsEngine = new OmsEngine({
+      timeoutMs: cfg.OMS_LEG_TIMEOUT_MS,
+      maxAttempts: cfg.OMS_MAX_ATTEMPTS,
+      logger,
+      feeSchedules: fees,
+    });
+    executor = new PaperExecutor({
+      maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
+      fees,
+      omsEngine,
+      logger,
+    });
+    const gateways = new Map(
+      cfg.VENUES.map((venue) => [venue, new StubOrderGateway(venue, logger)]),
+    );
+    const liveSender = new LiveOrderSender({
+      gateways,
+      engine: omsEngine,
+      portfolio: executor.portfolio,
+      fees,
+      audit,
+      logger,
+    });
+    omsEngine.setCommandSender(liveSender);
+  } else {
+    executor = new PaperExecutor({
+      maxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),
+      fees,
+      oms: cfg.OMS_ENABLED
+        ? {
+            enabled: true,
+            legTimeoutMs: cfg.OMS_LEG_TIMEOUT_MS,
+            maxAttempts: cfg.OMS_MAX_ATTEMPTS,
+            slippageBps: dec(cfg.PAPER_FILL_SLIPPAGE_BPS),
+          }
+        : undefined,
+      logger,
+    });
+  }
   const riskEngine = new RiskEngine(
     {
       RISK_MAX_NOTIONAL_PER_TRADE_USD: cfg.RISK_MAX_NOTIONAL_PER_TRADE_USD,

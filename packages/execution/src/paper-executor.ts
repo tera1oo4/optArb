@@ -24,6 +24,11 @@ export interface PaperExecutorConfig {
     maxAttempts: number;
     slippageBps: Decimal;
   };
+  /**
+   * Pre-built OMS engine with a custom command sender (e.g. live order gateway).
+   * When provided, `oms` is ignored for engine construction.
+   */
+  omsEngine?: OmsEngine;
   logger?: Logger;
 }
 
@@ -37,10 +42,13 @@ export class PaperExecutor {
   readonly portfolio = new PaperPortfolio();
   private readonly omsEngine?: OmsEngine;
   private readonly config: PaperExecutorConfig;
+  private lastViews: InstrumentView[] = [];
 
   constructor(config: PaperExecutorConfig) {
     this.config = config;
-    if (config.oms?.enabled) {
+    if (config.omsEngine) {
+      this.omsEngine = config.omsEngine;
+    } else if (config.oms?.enabled) {
       const engine = new OmsEngine({
         timeoutMs: config.oms.legTimeoutMs,
         maxAttempts: config.oms.maxAttempts,
@@ -66,6 +74,7 @@ export class PaperExecutor {
 
   /** Advance the OMS state machine: timeouts, cancels, leg-risk detection. */
   tick(nowMs: number, views: InstrumentView[]): void {
+    this.lastViews = views;
     this.omsEngine?.tick(nowMs, views);
   }
 
@@ -127,7 +136,7 @@ export class PaperExecutor {
 
     const scaled = this.scaleIntent(intent);
     const nowMs = intent.tsMs;
-    const attempt = this.omsEngine!.submit(scaled, nowMs);
+    const attempt = this.omsEngine!.submit(scaled, nowMs, this.lastViews);
 
     if (attempt.status === 'filled') {
       return { status: 'executed', result: this.buildResult(intent, attempt.fills) };

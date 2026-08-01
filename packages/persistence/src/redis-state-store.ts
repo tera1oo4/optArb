@@ -108,7 +108,11 @@ export class IoRedisStateStore implements RedisStateStore {
   }
 
   async setKillSwitch(active: boolean): Promise<void> {
-    await this.redis.set(this.killSwitchKey, active ? '1' : '0');
+    try {
+      await this.redis.set(this.killSwitchKey, active ? '1' : '0');
+    } catch (err) {
+      this.logger.error('redis setKillSwitch failed', { err: String(err) });
+    }
   }
 
   async getKillSwitch(): Promise<boolean> {
@@ -117,7 +121,8 @@ export class IoRedisStateStore implements RedisStateStore {
       return value === '1';
     } catch (err) {
       this.logger.error('redis getKillSwitch failed', { err: String(err) });
-      return false;
+      // Fail-closed: if we cannot read the kill switch, assume it is active.
+      return true;
     }
   }
 

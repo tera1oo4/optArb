@@ -2,7 +2,7 @@
 
 Система арбитража крипто-опционов между биржами **Deribit**, **Binance Options**, **Bybit**, **OKX** и бинарными контрактами **Polymarket** (моделируются как цифровые опционы). Активы v1: BTC, ETH. Стек: Node.js 22 + TypeScript, pnpm-монорепозиторий.
 
-**Статус:** стадия дизайна. Архитектурные решения — в [`docs/adr/`](docs/adr/README.md).
+**Статус:** paper-стадия с gated live-скелетом (M12). Архитектурные решения — в [`docs/adr/`](docs/adr/README.md).
 
 ## Документация
 
@@ -64,10 +64,10 @@
 10. ✅ Postgres audit persistence + docker-compose (optional, SSOT for fills/positions/risk decisions)
 11. ✅ Redis hot state + runtime kill switch: `RedisStateStore` in `@optarb/persistence`, `RuntimeKillSwitch` in `apps/trader`, per-venue-ready interface
 12. ✅ OMS two-legged state machine + leg-risk control (paper-only): `OmsEngine`, `PaperOrderSimulator`, `OMS_ENABLED` knob in `apps/trader`
-13. ✅ Production readiness: CI/CD, rotating JSONL capture, health endpoint, Docker image
-14. ✅ Подключены Polymarket digital-детекторы (`digital-vs-vanilla`, `YES/NO-parity`) к `apps/trader`
-13. ✅ Analytics & reporting: hit-rate, PnL curves, per-detector/per-venue attribution from audit data
-14. ✅ Production readiness: CI/CD, rotating capture, health endpoint, Docker image
+13. ✅ Live-trading scaffold (M12): `@optarb/live` order-gateway abstraction, stub adapters, operator-confirmation gate, fail-closed kill switch
+14. ✅ Production readiness: CI/CD, rotating JSONL capture, health endpoint, Docker image
+15. ✅ Подключены Polymarket digital-детекторы (`digital-vs-vanilla`, `YES/NO-parity`) к `apps/trader`
+16. ✅ Analytics & reporting: hit-rate, PnL curves, per-detector/per-venue attribution from audit data
 
 ### Polymarket → каноническая модель (M3)
 
@@ -77,3 +77,13 @@
 - CLOB market WS: subscribe `{"assets_ids":[...],"type":"market"}`, heartbeat клиентский `{}` каждые 10с; sequence нет — snapshot replace + level-дельты
 
 > Известное ограничение окружения: Bybit/Binance блокируют US-egress (403/451); OKX demo-книги пустые — для сигналов OKX используется prod read-only
+
+## Live trading (M12)
+
+A gated live-trading scaffold lives in `@optarb/live`:
+
+- `LIVE_TRADING=true` alone is **not enough** — the operator must also set `LIVE_TRADING_CONFIRMED=true`, otherwise the trader exits on startup.
+- Live mode requires `OMS_ENABLED=true` and routes order commands through venue `OrderGateway` adapters.
+- The default build ships with **stub gateways** that log and reject every order, so no real API calls are made unless a real adapter is explicitly injected.
+- Kill switch is fail-closed: any Redis/read error blocks new orders.
+- Edge-after-fees is enforced for all two-legged intents (cross-venue, digital-vs-vanilla, YES/NO-parity) before an order can be sent.

@@ -123,10 +123,8 @@ export class RiskEngine {
       );
     }
 
-    if (intent.signalKind === 'cross-venue') {
-      const edgeReason = this.checkCrossVenueEdge(intent);
-      if (edgeReason) reasons.push(edgeReason);
-    }
+    const edgeReason = this.checkTwoLeggedEdge(intent);
+    if (edgeReason) reasons.push(edgeReason);
 
     return reasons.length === 0 ? { allowed: true, reasons: [] } : { allowed: false, reasons };
   }
@@ -143,11 +141,10 @@ export class RiskEngine {
     return buckets.find((b) => b.key === key)?.notionalUsd ?? dec(0);
   }
 
-  private checkCrossVenueEdge(intent: ExecutionIntent): string | null {
+  private checkTwoLeggedEdge(intent: ExecutionIntent): string | null {
     if (intent.legs.length !== 2) return null;
     const [a, b] = intent.legs;
     if (!a || !b) return null;
-    if (a.viewKey !== b.viewKey) return null;
 
     const buyLeg = a.side === 'buy' ? a : b.side === 'buy' ? b : null;
     const sellLeg = a.side === 'sell' ? a : b.side === 'sell' ? b : null;

@@ -1,27 +1,20 @@
 {
-  "name": "@optarb/trader",
+  "name": "@optarb/live",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "tsx src/main.ts"
+  "exports": {
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@optarb/core": "workspace:*",
     "@optarb/execution": "workspace:*",
-    "@optarb/live": "workspace:*",
     "@optarb/marketdata": "workspace:*",
     "@optarb/persistence": "workspace:*",
-    "@optarb/risk": "workspace:*",
-    "@optarb/signals": "workspace:*",
-    "@optarb/venues": "workspace:*",
-    "dotenv": "^16.4.7",
-    "pino": "^9.6.0",
-    "zod": "^3.24.1"
+    "@optarb/venues": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

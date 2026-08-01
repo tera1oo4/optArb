@@ -227,7 +227,8 @@ describe('OmsEngine', () => {
       1001,
     );
     expect(engine.legRiskDetected(attempt, 1050)).toBe(false);
-    expect(engine.legRiskDetected(attempt, 1101)).toBe(true);
+    expect(engine.legRiskDetected(attempt, 1101)).toBe(false); // 1101 - fill 1001 = 100ms, not > timeout
+    expect(engine.legRiskDetected(attempt, 1102)).toBe(true); // 1102 - fill 1001 > 100ms
   });
 
   it('cancels pending legs on timeout and emits leg-risk for a filled partial', () => {
@@ -376,6 +377,49 @@ describe('PaperExecutor OMS mode', () => {
     expect(outcome.status).toBe('skipped');
     if (outcome.status !== 'skipped') return;
     expect(outcome.reason).toContain('rejected');
+  });
+
+  it('passes the latest views to the command sender on submit', () => {
+    const engine = new OmsEngine({ timeoutMs: 5000, maxAttempts: 1 });
+    const sentViews: InstrumentView[][] = [];
+    const sender: OrderCommandSender = {
+      submit: (_attempt, _legIndex, views) => {
+        sentViews.push(views);
+      },
+      cancel: () => {},
+    };
+    engine.setCommandSender(sender);
+
+    const views = [
+      viewForBoth('deribit:BTC-OPT', ['990', '1010'], 'okx:BTC-OPT', ['1000', '1020']),
+    ];
+    engine.submit(
+      makeIntent([leg('deribit', 'buy', '1000', '1'), leg('okx', 'sell', '1100', '1')]),
+      1000,
+      views,
+    );
+
+    expect(sentViews).toHaveLength(2);
+    expect(sentViews[0]).toBe(views);
+    expect(sentViews[1]).toBe(views);
+  });
+
+  it('sets firstFillTsMs from the first fill event, not attempt creation', () => {
+    const engine = new OmsEngine({ timeoutMs: 100, maxAttempts: 1 });
+    const attempt = engine.submit(
+      makeIntent([leg('deribit', 'buy', '1000', '1'), leg('okx', 'sell', '1100', '1')]),
+      1000,
+    );
+    expect(attempt.firstFillTsMs).toBeNull();
+
+    engine.onOrderEvent(
+      attempt.id,
+      0,
+      { kind: 'fill', tsMs: 1050, priceUsd: dec('1000'), sizeCoin: dec('1') },
+      1050,
+    );
+
+    expect(attempt.firstFillTsMs).toBe(1050);
   });
 });
 

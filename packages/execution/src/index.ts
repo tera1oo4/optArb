@@ -4,8 +4,8 @@
  * Hard invariant (ADR-0006): this package simulates fills against real book
  * prices. It contains NO order-placement code paths, imports no venue order
  * APIs, and must never gain them. Live execution, when it ever ships, will be
- * a separate gated component behind LIVE_TRADING=true + operator confirmation
- * and the risk package's pre-trade checks.
+ * a separate gated component. Use `@optarb/live` (M12) for the live order-gateway
+ * wiring; it is enabled only by LIVE_TRADING=true + operator confirmation.
  *
  * Contents:
  * - fees.ts                — per-venue FeeSchedule (option min(rate×index, cap×premium)

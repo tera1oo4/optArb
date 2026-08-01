@@ -279,7 +279,7 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
   });
 
-  it('skips edge-after-fees for non-cross-venue intents', async () => {
+  it('applies edge-after-fees to non-cross-venue intents', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const result = await engine.check(
       makeIntent(
@@ -289,7 +289,8 @@ describe('RiskEngine', () => {
       emptyState(),
       1_500,
     );
-    expect(result.allowed).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
   });
 
   it('skips edge-after-fees when fee schedules are missing for a leg venue', async () => {
@@ -305,7 +306,7 @@ describe('RiskEngine', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('skips edge-after-fees when the two legs do not share a view', async () => {
+  it('applies edge-after-fees even when the two legs do not share a view', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const result = await engine.check(
       makeIntent([
