@@ -171,6 +171,59 @@ describe('MarketDataStore', () => {
     expect(q.tsMs).toBe(1000);
   });
 
+  it('does not mix ticker prices with stale book sizes', () => {
+    const store = new MarketDataStore();
+    const expiryMs = Date.UTC(2026, 6, 12, 16, 0, 0, 0);
+    const yes: Instrument = {
+      id: instrumentId('polymarket', 'token-yes'),
+      venue: 'polymarket',
+      venueSymbol: 'token-yes',
+      kind: 'binary',
+      underlying: 'BTC',
+      expiryMs,
+      strike: dec('63000'),
+      optionType: 'call',
+      contractMultiplier: dec(1),
+      quoteCurrency: 'USDC',
+      settleCurrency: 'USDC',
+      metadata: { conditionId: '0xabc', outcome: 'Yes', parseable: 'true' },
+    };
+    store.registerInstrument(yes);
+
+    // Book arrives first with price + size.
+    store.applyBook({
+      venue: 'polymarket',
+      instrumentId: yes.id,
+      tsMs: 1000,
+      recvMs: 1000,
+      sequence: null,
+      bids: [{ price: dec('0.60'), size: dec('100') }],
+      asks: [{ price: dec('0.62'), size: dec('200') }],
+      quoteCurrency: 'USDC',
+    });
+
+    // Ticker arrives later with new prices but no sizes.
+    store.applyTicker({
+      venue: 'polymarket',
+      instrumentId: yes.id,
+      tsMs: 1100,
+      recvMs: 1100,
+      markPrice: null,
+      indexPrice: null,
+      markIv: null,
+      greeks: null,
+      bestBid: dec('0.59'),
+      bestAsk: dec('0.61'),
+      quoteCurrency: 'USDC',
+    });
+
+    const q = store.getView(`binary:BTC:${expiryMs}:63000:call`)!.quotes.get('polymarket')!;
+    expect(q.bidUsd?.toString()).toBe('0.59'); // ticker price is fresher
+    expect(q.bidSizeCoin).toBeNull(); // ticker must not retain stale book size
+    expect(q.askUsd?.toString()).toBe('0.61');
+    expect(q.askSizeCoin).toBeNull();
+  });
+
   it('keeps binary (Polymarket) instruments in a separate key namespace', () => {
     const store = new MarketDataStore();
     const expiryMs = Date.UTC(2026, 6, 12, 16, 0, 0, 0);

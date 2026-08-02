@@ -681,154 +681,175 @@ async function main(): Promise<void> {
   const dailyRealizedPnl = createDailyRealizedPnlTracker(
     executor.portfolio.snapshot(store.views()).realizedPnlUsd,
   );
-  const scanTimer = setInterval(async () => {
-    const nowMs = clock.nowMs();
-    lastScanTs = nowMs;
-    const views = store.views();
-    executor.tick(nowMs, views);
-    const signals = detector.detect(views, nowMs);
-    tracker.update(views, nowMs).forEach((o) =>
-      log.info(
-        {
-          signalId: o.signalId,
-          entrySpreadBps: o.entrySpreadBps,
-          horizonMs: o.horizonMs,
-          spreadBps: o.spreadBps,
-        },
-        'signal outcome',
-      ),
-    );
+  let scanInProgress = false;
+  let scanTimer: NodeJS.Timeout | null = null;
+  const scheduleScan = () => {
+    scanTimer = setTimeout(() => void runScan(), cfg.SCAN_INTERVAL_MS);
+  };
+  const runScan = async () => {
+    if (scanInProgress) {
+      log.warn('scan still in progress; skipping this interval to avoid reentrancy');
+      scheduleScan();
+      return;
+    }
+    scanInProgress = true;
+    try {
+      const nowMs = clock.nowMs();
+      lastScanTs = nowMs;
+      const views = store.views();
+      executor.tick(nowMs, views);
 
-    for (const s of signals) {
-      signalCount++;
-      reportSignalCount++;
-      tracker.record(s, nowMs);
-      const dedupeKey = `${s.key}:${s.buyVenue}->${s.sellVenue}`;
-      const first = !seenKeys.has(dedupeKey);
-      seenKeys.add(dedupeKey);
-      logSignal(log, s, first ? 'info' : 'debug');
+      // Read the kill switch once per scan instead of once per intent.
+      const killSwitchActive = await runtimeKillSwitch.isActive();
 
-      // Paper fills on first occurrence only to avoid re-executing the same
-      // quote every scan. Repeated signals are counted for stats.
-      if (!first) continue;
-      const view = store.getView(s.key);
-      if (!view) continue;
-      const intent = crossVenueIntent(s, view);
-      if (!intent) continue;
+      const signals = detector.detect(views, nowMs);
+      tracker.update(views, nowMs).forEach((o) =>
+        log.info(
+          {
+            signalId: o.signalId,
+            entrySpreadBps: o.entrySpreadBps,
+            horizonMs: o.horizonMs,
+            spreadBps: o.spreadBps,
+          },
+          'signal outcome',
+        ),
+      );
 
-      const snapshot = executor.portfolio.snapshot(store.views());
-      const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
-      const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
-      const riskResult = await riskEngine.check(intent, riskState, nowMs);
-      if (!riskResult.allowed) {
-        riskRejectCount += 1;
-        reportRiskRejectCount += 1;
-        log.warn(
+      for (const s of signals) {
+        signalCount++;
+        reportSignalCount++;
+        tracker.record(s, nowMs);
+        const dedupeKey = `${s.key}:${s.buyVenue}->${s.sellVenue}`;
+        const first = !seenKeys.has(dedupeKey);
+        seenKeys.add(dedupeKey);
+        logSignal(log, s, first ? 'info' : 'debug');
+
+        // Paper fills on first occurrence only to avoid re-executing the same
+        // quote every scan. Repeated signals are counted for stats.
+        if (!first) continue;
+        const view = store.getView(s.key);
+        if (!view) continue;
+        const intent = crossVenueIntent(s, view);
+        if (!intent) continue;
+
+        const snapshot = executor.portfolio.snapshot(store.views());
+        const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
+        const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
+        const riskResult = await riskEngine.check(intent, riskState, nowMs, killSwitchActive);
+        if (!riskResult.allowed) {
+          riskRejectCount += 1;
+          reportRiskRejectCount += 1;
+          log.warn(
+            {
+              signalId: intent.signalId,
+              reasons: riskResult.reasons,
+            },
+            'risk check denied intent',
+          );
+          void audit
+            .writeRiskDecision({
+              signalId: intent.signalId,
+              allowed: false,
+              reasons: riskResult.reasons,
+              checkedAt: new Date(nowMs),
+            })
+            .catch(() => {});
+          continue;
+        }
+
+        const outcome = executor.execute(intent);
+        if (outcome.status === 'executed') {
+          executedCount += 1;
+          reportFillCount += outcome.result.fills.length;
+        }
+        log.info(
           {
             signalId: intent.signalId,
-            reasons: riskResult.reasons,
+            outcome: outcomeLabel(outcome),
+            fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
           },
-          'risk check denied intent',
+          'paper execution',
         );
-        void audit
-          .writeRiskDecision({
+        if (outcome.status === 'executed') {
+          for (const fill of outcome.result.fills) logFill(log, fill);
+          void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
+            () => {},
+          );
+        }
+      }
+
+      const digitalSignals = digitalDetector.detect(views, nowMs);
+      for (const s of digitalSignals) {
+        digitalSignalCount++;
+        reportDigitalSignalCount++;
+        const dedupeKey = `${s.key}:${s.vanillaVenue}`;
+        const first = !seenDigitalKeys.has(dedupeKey);
+        seenDigitalKeys.add(dedupeKey);
+        if (first) logDigitalSignal(log, s);
+        // Observational only: hedging a Polymarket digital with vanilla options
+        // requires a call-spread replication book that is not modelled yet.
+      }
+
+      const yesNoSignals = yesNoDetector.detect(views, nowMs);
+      for (const s of yesNoSignals) {
+        yesNoSignalCount++;
+        reportYesNoSignalCount++;
+        const dedupeKey = `${s.marketKey}:${s.direction}`;
+        const first = !seenYesNoKeys.has(dedupeKey);
+        seenYesNoKeys.add(dedupeKey);
+        logYesNoSignal(log, s);
+        if (!first) continue;
+
+        const intent = yesNoParityIntent(s, store);
+        if (!intent) continue;
+        const snapshot = executor.portfolio.snapshot(store.views());
+        const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
+        const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
+        const riskResult = await riskEngine.check(intent, riskState, nowMs, killSwitchActive);
+        if (!riskResult.allowed) {
+          riskRejectCount += 1;
+          reportRiskRejectCount += 1;
+          log.warn(
+            { signalId: intent.signalId, reasons: riskResult.reasons },
+            'risk check denied intent',
+          );
+          void audit
+            .writeRiskDecision({
+              signalId: intent.signalId,
+              allowed: false,
+              reasons: riskResult.reasons,
+              checkedAt: new Date(nowMs),
+            })
+            .catch(() => {});
+          continue;
+        }
+
+        const outcome = executor.execute(intent);
+        if (outcome.status === 'executed') {
+          executedCount += 1;
+          reportFillCount += outcome.result.fills.length;
+        }
+        log.info(
+          {
             signalId: intent.signalId,
-            allowed: false,
-            reasons: riskResult.reasons,
-            checkedAt: new Date(nowMs),
-          })
-          .catch(() => {});
-        continue;
-      }
-
-      const outcome = executor.execute(intent);
-      if (outcome.status === 'executed') {
-        executedCount += 1;
-        reportFillCount += outcome.result.fills.length;
-      }
-      log.info(
-        {
-          signalId: intent.signalId,
-          outcome: outcomeLabel(outcome),
-          fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
-        },
-        'paper execution',
-      );
-      if (outcome.status === 'executed') {
-        for (const fill of outcome.result.fills) logFill(log, fill);
-        void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
-          () => {},
+            outcome: outcomeLabel(outcome),
+            fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
+          },
+          'paper execution',
         );
+        if (outcome.status === 'executed') {
+          for (const fill of outcome.result.fills) logFill(log, fill);
+          void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
+            () => {},
+          );
+        }
       }
+    } finally {
+      scanInProgress = false;
+      scheduleScan();
     }
-
-    const digitalSignals = digitalDetector.detect(views, nowMs);
-    for (const s of digitalSignals) {
-      digitalSignalCount++;
-      reportDigitalSignalCount++;
-      const dedupeKey = `${s.key}:${s.vanillaVenue}`;
-      const first = !seenDigitalKeys.has(dedupeKey);
-      seenDigitalKeys.add(dedupeKey);
-      if (first) logDigitalSignal(log, s);
-      // Observational only: hedging a Polymarket digital with vanilla options
-      // requires a call-spread replication book that is not modelled yet.
-    }
-
-    const yesNoSignals = yesNoDetector.detect(views, nowMs);
-    for (const s of yesNoSignals) {
-      yesNoSignalCount++;
-      reportYesNoSignalCount++;
-      const dedupeKey = `${s.marketKey}:${s.direction}`;
-      const first = !seenYesNoKeys.has(dedupeKey);
-      seenYesNoKeys.add(dedupeKey);
-      logYesNoSignal(log, s);
-      if (!first) continue;
-
-      const intent = yesNoParityIntent(s, store);
-      if (!intent) continue;
-      const snapshot = executor.portfolio.snapshot(store.views());
-      const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
-      const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
-      const riskResult = await riskEngine.check(intent, riskState, nowMs);
-      if (!riskResult.allowed) {
-        riskRejectCount += 1;
-        reportRiskRejectCount += 1;
-        log.warn(
-          { signalId: intent.signalId, reasons: riskResult.reasons },
-          'risk check denied intent',
-        );
-        void audit
-          .writeRiskDecision({
-            signalId: intent.signalId,
-            allowed: false,
-            reasons: riskResult.reasons,
-            checkedAt: new Date(nowMs),
-          })
-          .catch(() => {});
-        continue;
-      }
-
-      const outcome = executor.execute(intent);
-      if (outcome.status === 'executed') {
-        executedCount += 1;
-        reportFillCount += outcome.result.fills.length;
-      }
-      log.info(
-        {
-          signalId: intent.signalId,
-          outcome: outcomeLabel(outcome),
-          fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
-        },
-        'paper execution',
-      );
-      if (outcome.status === 'executed') {
-        for (const fill of outcome.result.fills) logFill(log, fill);
-        void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
-          () => {},
-        );
-      }
-    }
-  }, cfg.SCAN_INTERVAL_MS);
+  };
+  scheduleScan();
 
   const statsTimer = setInterval(() => {
     logger.info('trader stats', {
@@ -894,7 +915,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (signal: string) => {
     logger.info('shutting down', { signal });
-    clearInterval(scanTimer);
+    if (scanTimer) clearTimeout(scanTimer);
     clearInterval(statsTimer);
     clearInterval(reportTimer);
     await Promise.all(running.map((c) => c.disconnect()));

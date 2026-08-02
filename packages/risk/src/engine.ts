@@ -48,10 +48,15 @@ export class RiskEngine {
     private readonly killSwitch?: KillSwitchProvider,
   ) {}
 
-  async check(intent: ExecutionIntent, state: RiskState, nowMs: number): Promise<RiskCheckResult> {
+  async check(
+    intent: ExecutionIntent,
+    state: RiskState,
+    nowMs: number,
+    killSwitchActive?: boolean,
+  ): Promise<RiskCheckResult> {
     const reasons: string[] = [];
 
-    if (await this.isKillSwitchActive()) {
+    if (killSwitchActive ?? (await this.isKillSwitchActive())) {
       return { allowed: false, reasons: ['kill-switch'] };
     }
 

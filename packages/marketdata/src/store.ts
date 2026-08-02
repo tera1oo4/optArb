@@ -41,13 +41,22 @@ interface MutableQuote {
   instrumentId: string;
   quoteCurrency: QuoteCurrency;
   multiplier: Decimal;
-  bid: Decimal | null;
-  ask: Decimal | null;
-  bidSizeContracts: Decimal | null;
-  askSizeContracts: Decimal | null;
+  /** Top-of-book from the venue's real-time ticker (may carry no sizes). */
+  tickerBid: Decimal | null;
+  tickerAsk: Decimal | null;
+  tickerTsMs: number;
+  tickerRecvMs: number;
+  /** Top-of-book from the venue's order-book feed (prices + sizes). */
+  bookBid: Decimal | null;
+  bookAsk: Decimal | null;
+  bookBidSizeContracts: Decimal | null;
+  bookAskSizeContracts: Decimal | null;
+  bookTsMs: number;
+  bookRecvMs: number;
   mark: Decimal | null;
   markIv: Decimal | null;
   indexPriceUsd: Decimal | null;
+  /** Highest timestamp/recv across all sources; used for freshness checks. */
   tsMs: number;
   recvMs: number;
 }
@@ -117,10 +126,16 @@ export class MarketDataStore {
         instrumentId: inst.id,
         quoteCurrency: inst.quoteCurrency,
         multiplier: inst.contractMultiplier,
-        bid: null,
-        ask: null,
-        bidSizeContracts: null,
-        askSizeContracts: null,
+        tickerBid: null,
+        tickerAsk: null,
+        tickerTsMs: 0,
+        tickerRecvMs: 0,
+        bookBid: null,
+        bookAsk: null,
+        bookBidSizeContracts: null,
+        bookAskSizeContracts: null,
+        bookTsMs: 0,
+        bookRecvMs: 0,
         mark: null,
         markIv: null,
         indexPriceUsd: null,
@@ -135,13 +150,15 @@ export class MarketDataStore {
     if (!q) return false;
     // Drop out-of-order ticks to prevent stale prices with fresh recvMs.
     if (t.tsMs < q.tsMs) return false;
-    if (t.bestBid !== null) q.bid = t.bestBid;
-    if (t.bestAsk !== null) q.ask = t.bestAsk;
+    if (t.bestBid !== null) q.tickerBid = t.bestBid;
+    if (t.bestAsk !== null) q.tickerAsk = t.bestAsk;
     if (t.markPrice !== null) q.mark = t.markPrice;
     if (t.markIv !== null) q.markIv = t.markIv;
     if (t.indexPrice !== null) q.indexPriceUsd = t.indexPrice;
-    q.tsMs = t.tsMs;
-    q.recvMs = t.recvMs;
+    q.tickerTsMs = t.tsMs;
+    q.tickerRecvMs = t.recvMs;
+    q.tsMs = Math.max(q.tsMs, t.tsMs);
+    q.recvMs = Math.max(q.recvMs, t.recvMs);
     return true;
   }
 
@@ -153,15 +170,17 @@ export class MarketDataStore {
     const topBid = b.bids[0];
     const topAsk = b.asks[0];
     if (topBid) {
-      q.bid = topBid.price;
-      q.bidSizeContracts = topBid.size;
+      q.bookBid = topBid.price;
+      q.bookBidSizeContracts = topBid.size;
     }
     if (topAsk) {
-      q.ask = topAsk.price;
-      q.askSizeContracts = topAsk.size;
+      q.bookAsk = topAsk.price;
+      q.bookAskSizeContracts = topAsk.size;
     }
-    q.tsMs = b.tsMs;
-    q.recvMs = b.recvMs;
+    q.bookTsMs = b.tsMs;
+    q.bookRecvMs = b.recvMs;
+    q.tsMs = Math.max(q.tsMs, b.tsMs);
+    q.recvMs = Math.max(q.recvMs, b.recvMs);
     return true;
   }
 
@@ -199,23 +218,51 @@ export class MarketDataStore {
   }
 
   private materialize(q: MutableQuote): VenueQuote {
-    const bidUsd = q.bid === null ? null : priceToUsd(q.bid, q.quoteCurrency, q.indexPriceUsd);
-    const askUsd = q.ask === null ? null : priceToUsd(q.ask, q.quoteCurrency, q.indexPriceUsd);
+    const bid = this.choosePrice(q.tickerBid, q.tickerRecvMs, q.bookBid, q.bookRecvMs);
+    const ask = this.choosePrice(q.tickerAsk, q.tickerRecvMs, q.bookAsk, q.bookRecvMs);
+
+    const bidUsd =
+      bid.price === null ? null : priceToUsd(bid.price, q.quoteCurrency, q.indexPriceUsd);
+    const askUsd =
+      ask.price === null ? null : priceToUsd(ask.price, q.quoteCurrency, q.indexPriceUsd);
     const markUsd = q.mark === null ? null : priceToUsd(q.mark, q.quoteCurrency, q.indexPriceUsd);
+
     return {
       venue: q.venue,
       instrumentId: q.instrumentId,
       bidUsd,
       askUsd,
       bidSizeCoin:
-        q.bidSizeContracts === null ? null : contractsToCoin(q.bidSizeContracts, q.multiplier),
+        bid.fromBook && q.bookBidSizeContracts !== null
+          ? contractsToCoin(q.bookBidSizeContracts, q.multiplier)
+          : null,
       askSizeCoin:
-        q.askSizeContracts === null ? null : contractsToCoin(q.askSizeContracts, q.multiplier),
+        ask.fromBook && q.bookAskSizeContracts !== null
+          ? contractsToCoin(q.bookAskSizeContracts, q.multiplier)
+          : null,
       markUsd,
       markIv: q.markIv,
       indexPriceUsd: q.indexPriceUsd,
       tsMs: q.tsMs,
       recvMs: q.recvMs,
     };
+  }
+
+  private choosePrice(
+    tickerPrice: Decimal | null,
+    tickerRecvMs: number,
+    bookPrice: Decimal | null,
+    bookRecvMs: number,
+  ): { price: Decimal | null; fromBook: boolean } {
+    const hasTicker = tickerPrice !== null;
+    const hasBook = bookPrice !== null;
+    if (!hasTicker && !hasBook) return { price: null, fromBook: false };
+    if (hasTicker && !hasBook) return { price: tickerPrice, fromBook: false };
+    if (!hasTicker && hasBook) return { price: bookPrice, fromBook: true };
+    // Both sources present: use the fresher one. Ticker carries no size, so a
+    // ticker-overwrite must not retain stale book sizes (review #4).
+    return tickerRecvMs > bookRecvMs
+      ? { price: tickerPrice, fromBook: false }
+      : { price: bookPrice, fromBook: true };
   }
 }

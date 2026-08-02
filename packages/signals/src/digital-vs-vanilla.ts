@@ -76,8 +76,14 @@ export class DigitalVsVanillaDetector {
       const timeToExpiryYears = dec(view.expiryMs - nowMs).div(MS_PER_YEAR);
       if (timeToExpiryYears.lte(0)) continue;
 
+      // Synthetic forward from the spot index: F = S * exp(r * T).
+      // This keeps the Black-76 model internally consistent instead of passing
+      // the spot index directly as the forward while still discounting by r.
+      const rateTimesT = this.config.rate.mul(timeToExpiryYears);
+      const forwardUsd = source.indexPriceUsd!.mul(dec(Math.exp(rateTimesT.toNumber())));
+
       const modelPrice = digitalCallPrice({
-        forward: source.indexPriceUsd!,
+        forward: forwardUsd,
         strike: view.strike,
         vol: source.markIv!,
         timeToExpiryYears,
@@ -97,7 +103,7 @@ export class DigitalVsVanillaDetector {
         polymarketPrice: mid,
         modelPrice,
         edge,
-        forwardUsd: source.indexPriceUsd!,
+        forwardUsd,
         vol: source.markIv!,
         tsMs: Math.max(poly.tsMs, source.tsMs),
       });
