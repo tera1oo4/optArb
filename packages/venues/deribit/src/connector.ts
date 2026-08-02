@@ -1,7 +1,7 @@
-import WebSocket from 'ws';
 import { z } from 'zod';
 import {
   assertHttpOk,
+  BaseWsConnector,
   dec,
   emitAll,
   instrumentId,
@@ -62,25 +62,20 @@ interface RpcEnvelope {
  * Native Deribit connector (ADR-0003): JSON-RPC 2.0 over WS, instrument metadata
  * from the API, heartbeat via set_heartbeat, reconnect with backoff, book
  * resync on sequence gaps, raw capture of every frame for replay.
+ *
+ * Refactored to extend the shared BaseWsConnector so lifecycle/reconnect code
+ * is not duplicated per venue.
  */
-export class DeribitConnector implements VenueConnector {
+export class DeribitConnector extends BaseWsConnector implements VenueConnector {
   readonly venue = 'deribit' as const;
 
   private readonly config: DeribitConnectorConfig;
   private readonly ctx: DeribitMarketContext;
   private readonly subscribed = new Map<string, Instrument>();
-
-  private ws: WebSocket | null = null;
   private requestId = 0;
-  private intentionalClose = false;
-  private reconnectAttempt = 0;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private state: ConnectorState = 'disconnected';
 
-  constructor(
-    config: Partial<DeribitConnectorConfig>,
-    private readonly deps: ConnectorDeps,
-  ) {
+  constructor(config: Partial<DeribitConnectorConfig>, deps: ConnectorDeps) {
+    super({ wsUrl: { ...DEFAULTS, ...config }.wsUrl }, deps);
     this.config = { ...DEFAULTS, ...config };
     this.ctx = createMarketContext({
       bookDepth: this.config.bookDepth,
@@ -123,12 +118,6 @@ export class DeribitConnector implements VenueConnector {
     });
   }
 
-  async connect(): Promise<void> {
-    if (this.ws || this.state === 'connecting') return;
-    this.intentionalClose = false;
-    await this.openSocket();
-  }
-
   async subscribe(instruments: Instrument[]): Promise<void> {
     for (const inst of instruments) {
       this.subscribed.set(inst.venueSymbol, inst);
@@ -138,66 +127,20 @@ export class DeribitConnector implements VenueConnector {
   }
 
   async disconnect(): Promise<void> {
-    this.intentionalClose = true;
-    this.clearReconnectTimer();
-    const ws = this.ws;
-    this.ws = null;
-    this.state = 'disconnected';
-    ws?.close();
-    this.emitStatus('disconnected', 'closed by client');
+    await super.disconnect();
   }
 
-  /* ------------------------------- internals ------------------------------- */
-
-  private openSocket(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.state = 'connecting';
-      this.emitStatus('connecting');
-      const ws = new WebSocket(this.config.wsUrl);
-      this.ws = ws;
-
-      const onEarlyError = (err: Error) => {
-        ws.off('open', onOpen);
-        reject(err);
-      };
-      const onOpen = () => {
-        ws.off('error', onEarlyError);
-        this.state = 'connected';
-        this.reconnectAttempt = 0;
-        this.emitStatus('connected');
-        this.send('public/set_heartbeat', { interval: 30 });
-        if (this.subscribed.size > 0) this.sendSubscribe([...this.subscribed.keys()]);
-        resolve();
-      };
-
-      ws.once('open', onOpen);
-      ws.once('error', onEarlyError);
-      ws.on('message', (data: WebSocket.RawData) => this.onMessage(data));
-      ws.on('close', () => this.onClose());
-      ws.on('error', (err) => this.deps.logger.error('deribit ws error', { err: String(err) }));
-    });
+  /** Called after the socket opens: enable Deribit heartbeats and resubscribe. */
+  protected onWsOpen(): void {
+    this.sendRpc('public/set_heartbeat', { interval: 30 });
+    if (this.subscribed.size > 0) this.sendSubscribe([...this.subscribed.keys()]);
   }
 
-  private onMessage(data: WebSocket.RawData): void {
-    let msg: unknown;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      this.deps.logger.warn('deribit: unparseable ws frame');
-      return;
-    }
-
-    this.deps.capture.record({
-      tsMs: this.deps.clock.nowMs(),
-      venue: this.venue,
-      channel: 'ws',
-      direction: 'in',
-      payload: msg,
-    });
-
-    const envelope = msg as RpcEnvelope;
+  /** Called for each parsed JSON message. */
+  protected onWsMessage(payload: unknown): void {
+    const envelope = payload as RpcEnvelope;
     if (envelope.method === 'heartbeat' && envelope.params?.type === 'test_request') {
-      this.send('public/test', {});
+      this.sendRpc('public/test', {});
       return;
     }
     if (envelope.method === 'subscription' && envelope.params?.channel) {
@@ -233,40 +176,22 @@ export class DeribitConnector implements VenueConnector {
     }
   }
 
-  private onClose(): void {
-    this.ws = null;
-    const wasIntentional = this.intentionalClose;
-    this.state = 'disconnected';
-    this.emitStatus('disconnected', wasIntentional ? 'closed by client' : 'connection lost');
-    if (!wasIntentional) this.scheduleReconnect();
-  }
-
-  private scheduleReconnect(): void {
-    this.clearReconnectTimer();
-    const attempt = this.reconnectAttempt++;
-    const delay = Math.min(500 * 2 ** attempt, 15_000) + Math.floor(Math.random() * 500);
-    this.emitStatus('reconnecting', `attempt ${attempt + 1} in ${delay}ms`);
-    this.reconnectTimer = setTimeout(() => {
-      void this.openSocket().catch((err) => {
-        this.deps.logger.warn('deribit: reconnect attempt failed', { err: String(err) });
-        // Failure also surfaces via ws 'close' → onClose schedules the next attempt.
-      });
-    }, delay);
-  }
-
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+  /** Override status emission to use the concrete venue name. */
+  protected emitStatus(state: ConnectorState, detail?: string): void {
+    this.deps.bus.emit('connector.status', {
+      venue: this.venue,
+      state,
+      tsMs: this.deps.clock.nowMs(),
+      detail,
+    });
   }
 
   private resyncBook(symbol: string): void {
     this.ctx.books.get(symbol)?.reset();
     this.ctx.books.delete(symbol);
     const channel = `book.${symbol}.none.${this.config.bookDepth}.100ms`;
-    this.send('public/unsubscribe', { channels: [channel] });
-    this.send('public/subscribe', { channels: [channel] });
+    this.sendRpc('public/unsubscribe', { channels: [channel] });
+    this.sendRpc('public/subscribe', { channels: [channel] });
   }
 
   private sendSubscribe(symbols: string[]): void {
@@ -277,29 +202,11 @@ export class DeribitConnector implements VenueConnector {
       channels.push(`trades.${s}.100ms`);
     }
     for (let i = 0; i < channels.length; i += 50) {
-      this.send('public/subscribe', { channels: channels.slice(i, i + 50) });
+      this.sendRpc('public/subscribe', { channels: channels.slice(i, i + 50) });
     }
   }
 
-  private send(method: string, params: Record<string, unknown>): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const payload = { jsonrpc: '2.0', id: ++this.requestId, method, params };
-    this.ws.send(JSON.stringify(payload));
-    this.deps.capture.record({
-      tsMs: this.deps.clock.nowMs(),
-      venue: this.venue,
-      channel: 'ws',
-      direction: 'out',
-      payload,
-    });
-  }
-
-  private emitStatus(state: ConnectorState, detail?: string): void {
-    this.deps.bus.emit('connector.status', {
-      venue: this.venue,
-      state,
-      tsMs: this.deps.clock.nowMs(),
-      detail,
-    });
+  private sendRpc(method: string, params: Record<string, unknown>): void {
+    this.send({ jsonrpc: '2.0', id: ++this.requestId, method, params });
   }
 }

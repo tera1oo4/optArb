@@ -353,11 +353,13 @@ async function persistExecution(
   fills: PaperFill[],
   views: InstrumentView[],
 ): Promise<void> {
+  const buyLeg = intent.legs.find((l) => l.side === 'buy');
+  const sellLeg = intent.legs.find((l) => l.side === 'sell');
   const orderId = await audit.writeOrder({
     signalId: intent.signalId,
     signalKind: intent.signalKind,
-    venueBuy: intent.legs[0].venue,
-    venueSell: intent.legs[1].venue,
+    venueBuy: buyLeg?.venue ?? intent.legs[0]!.venue,
+    venueSell: sellLeg?.venue ?? intent.legs[1]!.venue,
     requestedNotionalUsd: requestedNotionalUsd(intent),
     status: 'executed',
   });
@@ -569,7 +571,7 @@ async function main(): Promise<void> {
       RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
       RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
     },
-    resolveFeeSchedules(feeOverrides(cfg)),
+    fees,
     () => runtimeKillSwitch.isActive(),
   );
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
@@ -675,9 +677,9 @@ async function main(): Promise<void> {
   let reportDigitalSignalCount = 0;
   let yesNoSignalCount = 0;
   let reportYesNoSignalCount = 0;
-  const seenKeys = new Set<string>();
-  const seenDigitalKeys = new Set<string>();
-  const seenYesNoKeys = new Set<string>();
+  let seenKeys = new Set<string>();
+  let seenDigitalKeys = new Set<string>();
+  let seenYesNoKeys = new Set<string>();
   const dailyRealizedPnl = createDailyRealizedPnlTracker(
     executor.portfolio.snapshot(store.views()).realizedPnlUsd,
   );
@@ -694,6 +696,10 @@ async function main(): Promise<void> {
     }
     scanInProgress = true;
     try {
+      const seenThisScan = new Set<string>();
+      const seenDigitalThisScan = new Set<string>();
+      const seenYesNoThisScan = new Set<string>();
+
       const nowMs = clock.nowMs();
       lastScanTs = nowMs;
       const views = store.views();
@@ -721,7 +727,7 @@ async function main(): Promise<void> {
         tracker.record(s, nowMs);
         const dedupeKey = `${s.key}:${s.buyVenue}->${s.sellVenue}`;
         const first = !seenKeys.has(dedupeKey);
-        seenKeys.add(dedupeKey);
+        seenThisScan.add(dedupeKey);
         logSignal(log, s, first ? 'info' : 'debug');
 
         // Paper fills on first occurrence only to avoid re-executing the same
@@ -784,7 +790,7 @@ async function main(): Promise<void> {
         reportDigitalSignalCount++;
         const dedupeKey = `${s.key}:${s.vanillaVenue}`;
         const first = !seenDigitalKeys.has(dedupeKey);
-        seenDigitalKeys.add(dedupeKey);
+        seenDigitalThisScan.add(dedupeKey);
         if (first) logDigitalSignal(log, s);
         // Observational only: hedging a Polymarket digital with vanilla options
         // requires a call-spread replication book that is not modelled yet.
@@ -796,7 +802,7 @@ async function main(): Promise<void> {
         reportYesNoSignalCount++;
         const dedupeKey = `${s.marketKey}:${s.direction}`;
         const first = !seenYesNoKeys.has(dedupeKey);
-        seenYesNoKeys.add(dedupeKey);
+        seenYesNoThisScan.add(dedupeKey);
         logYesNoSignal(log, s);
         if (!first) continue;
 
@@ -844,6 +850,12 @@ async function main(): Promise<void> {
           );
         }
       }
+
+      // Drop keys for signals that disappeared; keep keys for signals that are
+      // still present so we do not re-execute the same opportunity every tick.
+      seenKeys = new Set(seenThisScan);
+      seenDigitalKeys = new Set(seenDigitalThisScan);
+      seenYesNoKeys = new Set(seenYesNoThisScan);
     } finally {
       scanInProgress = false;
       scheduleScan();
@@ -866,9 +878,6 @@ async function main(): Promise<void> {
     riskRejectCount = 0;
     digitalSignalCount = 0;
     yesNoSignalCount = 0;
-    seenKeys.clear();
-    seenDigitalKeys.clear();
-    seenYesNoKeys.clear();
   }, cfg.STATS_INTERVAL_MS);
 
   const reportTimer = setInterval(() => {

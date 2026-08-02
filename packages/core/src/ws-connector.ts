@@ -8,6 +8,8 @@ export interface WsConnectorOptions {
   headers?: Record<string, string>;
   /** App-level heartbeat cadence in ms; disabled when unset */
   heartbeatIntervalMs?: number;
+  /** Force reconnect if no frame is read in this many ms; disabled when unset */
+  readIdleTimeoutMs?: number;
   baseReconnectDelayMs?: number;
   maxReconnectDelayMs?: number;
 }
@@ -27,6 +29,8 @@ export abstract class BaseWsConnector {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private readIdleTimer: NodeJS.Timeout | null = null;
+  private lastReadTs = 0;
   private connectPromise: Promise<void> | null = null;
 
   constructor(
@@ -112,8 +116,10 @@ export abstract class BaseWsConnector {
         ws.off('error', onEarlyError);
         this.state = 'connected';
         this.reconnectAttempt = 0;
+        this.lastReadTs = this.deps.clock.nowMs();
         this.emitStatus('connected');
         this.startHeartbeat();
+        this.startReadIdleWatchdog();
         this.onWsOpen();
         resolve();
       };
@@ -129,6 +135,7 @@ export abstract class BaseWsConnector {
   }
 
   private handleFrame(data: WebSocket.RawData): void {
+    this.lastReadTs = this.deps.clock.nowMs();
     const text = data.toString();
     let payload: unknown;
     try {
@@ -154,6 +161,7 @@ export abstract class BaseWsConnector {
   private onClose(): void {
     this.ws = null;
     this.stopHeartbeat();
+    this.stopReadIdleWatchdog();
     const wasIntentional = this.intentionalClose;
     this.state = 'disconnected';
     this.emitStatus('disconnected', wasIntentional ? 'closed by client' : 'connection lost');
@@ -192,8 +200,34 @@ export abstract class BaseWsConnector {
     }
   }
 
+  private startReadIdleWatchdog(): void {
+    this.stopReadIdleWatchdog();
+    const timeout = this.options.readIdleTimeoutMs;
+    if (!timeout) return;
+    this.readIdleTimer = setInterval(
+      () => {
+        const idle = this.deps.clock.nowMs() - this.lastReadTs;
+        if (idle >= timeout && this.ws) {
+          this.deps.logger.warn(`${this.venue}: read-idle watchdog closing socket`, {
+            idleMs: idle,
+          });
+          this.ws.terminate();
+        }
+      },
+      Math.max(1000, Math.floor(timeout / 4)),
+    );
+  }
+
+  private stopReadIdleWatchdog(): void {
+    if (this.readIdleTimer) {
+      clearInterval(this.readIdleTimer);
+      this.readIdleTimer = null;
+    }
+  }
+
   private clearTimers(): void {
     this.stopHeartbeat();
+    this.stopReadIdleWatchdog();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
