@@ -41,7 +41,7 @@ export class LiveOrderSender implements OrderCommandSender {
     this.config = config;
   }
 
-  submit(attempt: OrderAttempt, legIndex: number, _views: InstrumentView[], nowMs: number): void {
+  submit(attempt: OrderAttempt, legIndex: number, views: InstrumentView[], nowMs: number): void {
     const leg = attempt.legs[legIndex];
     if (!leg) return;
 
@@ -56,12 +56,17 @@ export class LiveOrderSender implements OrderCommandSender {
       return;
     }
 
+    const view = views.find((v) => v.quotes.get(leg.venue)?.instrumentId === leg.instrumentId);
+    const quote = view?.quotes.get(leg.venue);
+
     const req: OrderRequest = {
       venue: leg.venue,
       instrumentId: leg.instrumentId,
       side: leg.side,
       sizeCoin: leg.requestedSizeCoin,
       priceUsd: leg.requestedPriceUsd,
+      indexPriceUsd: quote?.indexPriceUsd ?? leg.indexPriceUsd ?? undefined,
+      contractMultiplier: quote?.contractMultiplier ?? undefined,
       signalId: attempt.signalId,
       attemptId: attempt.id,
       legIndex,

@@ -53,6 +53,7 @@ function venueQuote(
     markUsd: dec('1500'),
     markIv: null,
     indexPriceUsd: dec('100000'),
+    contractMultiplier: dec(1),
     tsMs: 1000,
     recvMs: 1000,
   };

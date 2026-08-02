@@ -18,6 +18,7 @@ function makeQuote(partial: Partial<VenueQuote>): VenueQuote {
     markUsd: null,
     markIv: null,
     indexPriceUsd: null,
+    contractMultiplier: dec(1),
     tsMs: NOW - 100,
     recvMs: NOW - 100,
     ...partial,

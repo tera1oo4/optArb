@@ -22,6 +22,8 @@ export interface VenueQuote {
   markUsd: Decimal | null;
   markIv: Decimal | null;
   indexPriceUsd: Decimal | null;
+  /** Contract multiplier used to convert sizeCoin to/from contracts. */
+  contractMultiplier: Decimal;
   tsMs: number;
   recvMs: number;
 }
@@ -243,6 +245,7 @@ export class MarketDataStore {
       markUsd,
       markIv: q.markIv,
       indexPriceUsd: q.indexPriceUsd,
+      contractMultiplier: q.multiplier,
       tsMs: q.tsMs,
       recvMs: q.recvMs,
     };

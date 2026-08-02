@@ -13,6 +13,10 @@ export interface OrderRequest {
   side: Side;
   sizeCoin: Decimal;
   priceUsd: Decimal;
+  /** Optional spot/index price for adapters that need to convert USD → coin price. */
+  indexPriceUsd?: Decimal;
+  /** Optional contract multiplier for adapters that need sizeCoin → contracts. */
+  contractMultiplier?: Decimal;
   signalId: string;
   attemptId: string;
   legIndex: number;

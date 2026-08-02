@@ -21,7 +21,12 @@ import {
   type PaperFill,
   type PortfolioSnapshot,
 } from '@optarb/execution';
-import { LiveOrderSender, StubOrderGateway } from '@optarb/live';
+import {
+  DeribitOrderGateway,
+  LiveOrderSender,
+  StubOrderGateway,
+  type OrderGateway,
+} from '@optarb/live';
 import { MarketDataStore, type InstrumentView, type VenueQuote } from '@optarb/marketdata';
 import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
 import {
@@ -459,6 +464,11 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   const log = pino({ level: cfg.LOG_LEVEL });
   const logger = toLogger(log);
+  const deribitReal =
+    cfg.LIVE_TRADING &&
+    cfg.VENUES.includes('deribit') &&
+    !!cfg.DERIBIT_API_KEY &&
+    !!cfg.DERIBIT_API_SECRET;
   const audit = createAuditWriter({ PERSIST_POSTGRES_URL: cfg.PERSIST_POSTGRES_URL }, logger);
   const redisStore = createRedisStateStore({ REDIS_URL: cfg.REDIS_URL }, logger, {
     killSwitchKey: cfg.RISK_KILL_SWITCH_REDIS_KEY,
@@ -473,6 +483,8 @@ async function main(): Promise<void> {
     log.fatal(
       {
         venues: cfg.VENUES,
+        realVenues: deribitReal ? ['deribit'] : [],
+        stubVenues: cfg.VENUES.filter((v) => !(v === 'deribit' && deribitReal)),
         maxNotionalUsd: cfg.PAPER_MAX_NOTIONAL_USD,
         maxDailyLossUsd: cfg.RISK_MAX_DAILY_LOSS_USD,
         confirmationVar: 'LIVE_TRADING_CONFIRMED=true',
@@ -487,6 +499,8 @@ async function main(): Promise<void> {
     }
     logger.info('trader starting in LIVE mode', {
       venues: cfg.VENUES,
+      realVenues: deribitReal ? ['deribit'] : [],
+      stubVenues: cfg.VENUES.filter((v) => !(v === 'deribit' && deribitReal)),
       auditEnabled: !!cfg.PERSIST_POSTGRES_URL,
       redisEnabled: !!cfg.REDIS_URL,
     });
@@ -533,8 +547,23 @@ async function main(): Promise<void> {
       omsEngine,
       logger,
     });
-    const gateways = new Map(
-      cfg.VENUES.map((venue) => [venue, new StubOrderGateway(venue, logger)]),
+    const hasDeribitCreds =
+      cfg.DERIBIT_API_KEY && cfg.DERIBIT_API_SECRET && cfg.VENUES.includes('deribit');
+    const gateways = new Map<Venue, OrderGateway>(
+      cfg.VENUES.map((venue) => {
+        if (venue === 'deribit' && hasDeribitCreds) {
+          return [
+            venue,
+            new DeribitOrderGateway({
+              clientId: cfg.DERIBIT_API_KEY!,
+              clientSecret: cfg.DERIBIT_API_SECRET!,
+              testnet: true,
+              logger,
+            }),
+          ] as const;
+        }
+        return [venue, new StubOrderGateway(venue, logger)] as const;
+      }),
     );
     const liveSender = new LiveOrderSender({
       gateways,
