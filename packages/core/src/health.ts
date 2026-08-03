@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 export interface HealthCheckResult {
   healthy: boolean;
@@ -81,7 +81,18 @@ function sendJson(
  * Create an HTTP server exposing `/health` (all checks) and `/ready` (critical checks only).
  * Resolves once the server is listening.
  */
-export async function createHealthServer(registry: HealthRegistry, port: number): Promise<Server> {
+export interface CreateHealthServerOptions {
+  port: number;
+  /** Optional handler for non-health routes (e.g. dashboard). Return true if handled. */
+  extraHandler?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
+}
+
+export async function createHealthServer(
+  registry: HealthRegistry,
+  options: number | CreateHealthServerOptions,
+): Promise<Server> {
+  const opts: CreateHealthServerOptions = typeof options === 'number' ? { port: options } : options;
+
   const server = createServer(async (req, res) => {
     if (req.method !== 'GET') {
       sendJson(res, 405, {
@@ -104,6 +115,21 @@ export async function createHealthServer(registry: HealthRegistry, port: number)
       return;
     }
 
+    if (opts.extraHandler) {
+      try {
+        const handled = await opts.extraHandler(req, res);
+        if (handled) return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        sendJson(res, 500, {
+          status: 'unhealthy',
+          checks: { error: { healthy: false, message } },
+          ts: new Date().toISOString(),
+        });
+        return;
+      }
+    }
+
     sendJson(res, 404, {
       status: 'unhealthy',
       checks: { error: { healthy: false, message: 'not found' } },
@@ -113,7 +139,7 @@ export async function createHealthServer(registry: HealthRegistry, port: number)
 
   return new Promise<Server>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, () => {
+    server.listen(opts.port, () => {
       server.off('error', reject);
       resolve(server);
     });

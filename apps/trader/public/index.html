@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>optArb dashboard</title>
+    <link rel="stylesheet" href="/dashboard.css" />
+  </head>
+  <body>
+    <header>
+      <h1>optArb dashboard</h1>
+      <span id="overall-status" class="status-badge">loading</span>
+    </header>
+
+    <main>
+      <section>
+        <h2>Status</h2>
+        <div id="status-grid" class="grid"></div>
+      </section>
+
+      <section>
+        <h2>Portfolio</h2>
+        <pre id="portfolio">loading...</pre>
+      </section>
+
+      <section>
+        <h2>Recent signals</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>time</th>
+              <th>kind</th>
+              <th>key</th>
+              <th>buy</th>
+              <th>sell</th>
+              <th>spread (bps)</th>
+              <th>size USD</th>
+            </tr>
+          </thead>
+          <tbody id="signals-body">
+            <tr><td colspan="7" class="muted">no signals yet</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Recent log tail</h2>
+        <pre id="logs">waiting for data...</pre>
+      </section>
+    </main>
+
+    <footer>
+      auto-refresh every 2 s · <a href="/health">/health</a> · <a href="/api/status">/api/status</a>
+    </footer>
+
+    <script src="/dashboard.js"></script>
+  </body>
+</html>

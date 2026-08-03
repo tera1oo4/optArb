@@ -87,3 +87,24 @@ A gated live-trading scaffold lives in `@optarb/live`:
 - The default build ships with **stub gateways** that log and reject every order, so no real API calls are made unless a real adapter is explicitly injected.
 - Kill switch is fail-closed: any Redis/read error blocks new orders.
 - Edge-after-fees is enforced for all two-legged intents (cross-venue, digital-vs-vanilla, YES/NO-parity) before an order can be sent.
+
+## Web dashboard
+
+The trader exposes a lightweight web dashboard on the health port (default `8080`):
+
+```bash
+open http://localhost:8080
+```
+
+It shows:
+- overall health, venue connection status and last-message ages;
+- last 50 cross-venue / digital / yes-no signals with spreads and sizes;
+- live portfolio summary (open positions, gross notional, PnL, per-venue attribution);
+- recent stats and portfolio summary log entries.
+
+JSON endpoints:
+- `GET /health` — health checks
+- `GET /api/status` — status + venue ages
+- `GET /api/signals` — recent signals
+- `GET /api/portfolio` — latest portfolio snapshot
+- `GET /api/logs` — latest stats + portfolio summary

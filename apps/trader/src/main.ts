@@ -46,8 +46,9 @@ import {
   type MetricsSnapshot,
   type RedisPortfolioSnapshot,
 } from '@optarb/persistence';
-import { loadConfig } from './config.js';
+import { createDashboardHandler, pushSignal, type DashboardState } from './dashboard.js';
 import { createDailyRealizedPnlTracker } from './daily-pnl.js';
+import { loadConfig } from './config.js';
 import { SignalTracker } from './signal-tracker.js';
 import { createRuntimeKillSwitch } from './runtime-kill-switch.js';
 
@@ -469,6 +470,18 @@ async function main(): Promise<void> {
     cfg.VENUES.includes('deribit') &&
     !!cfg.DERIBIT_API_KEY &&
     !!cfg.DERIBIT_API_SECRET;
+
+  const dashboardState: DashboardState = {
+    venues: cfg.VENUES,
+    statuses: new Map(),
+    lastMessageTs: new Map(),
+    lastScanTs: 0,
+    instrumentCount: 0,
+    recentSignals: [],
+    latestPortfolioSummary: null,
+    latestStats: null,
+  };
+
   const audit = createAuditWriter({ PERSIST_POSTGRES_URL: cfg.PERSIST_POSTGRES_URL }, logger);
   const redisStore = createRedisStateStore({ REDIS_URL: cfg.REDIS_URL }, logger, {
     killSwitchKey: cfg.RISK_KILL_SWITCH_REDIS_KEY,
@@ -605,18 +618,16 @@ async function main(): Promise<void> {
   );
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
-  const statuses = new Map<Venue, import('@optarb/core').ConnectorStatus>();
-  const lastMessageTs = new Map<Venue, number>();
   bus.on('market.ticker', (t) => {
     store.applyTicker(t);
-    lastMessageTs.set(t.venue, t.recvMs);
+    dashboardState.lastMessageTs.set(t.venue, t.recvMs);
   });
   bus.on('market.book', (b) => {
     store.applyBook(b);
-    lastMessageTs.set(b.venue, b.recvMs);
+    dashboardState.lastMessageTs.set(b.venue, b.recvMs);
   });
   bus.on('connector.status', (s) => {
-    statuses.set(s.venue, s);
+    dashboardState.statuses.set(s.venue, s);
     logger.info('connector status', { ...s });
   });
 
@@ -629,6 +640,7 @@ async function main(): Promise<void> {
     try {
       const instruments = await connector.loadInstruments();
       for (const inst of instruments) store.registerInstrument(inst);
+      dashboardState.instrumentCount += instruments.length;
       logger.info('instruments registered', { venue: connector.venue, count: instruments.length });
       await connector.connect();
       await connector.subscribe(instruments);
@@ -650,8 +662,8 @@ async function main(): Promise<void> {
     healthRegistry.register(
       `venue:${venue}`,
       () => {
-        const status = statuses.get(venue);
-        const lastTs = lastMessageTs.get(venue) ?? 0;
+        const status = dashboardState.statuses.get(venue);
+        const lastTs = dashboardState.lastMessageTs.get(venue) ?? 0;
         const nowMs = clock.nowMs();
         if (!status || status.state !== 'connected') {
           return { healthy: false, message: `state=${status?.state ?? 'unknown'}` };
@@ -676,20 +688,27 @@ async function main(): Promise<void> {
     },
     { critical: cfg.PERSIST_POSTGRES_URL ? true : false },
   );
-  let lastScanTs = 0;
   healthRegistry.register('last-scan', () => {
     const nowMs = clock.nowMs();
-    const stale = nowMs - lastScanTs > SCAN_STALE_MS;
+    const stale = nowMs - dashboardState.lastScanTs > SCAN_STALE_MS;
     return {
       healthy: !stale,
-      message: stale ? `no scan for ${nowMs - lastScanTs}ms` : 'recent',
+      message: stale ? `no scan for ${nowMs - dashboardState.lastScanTs}ms` : 'recent',
     };
   });
 
   let healthServer: Server | undefined;
   if (cfg.HEALTH_ENABLED) {
     try {
-      healthServer = await createHealthServer(healthRegistry, cfg.HEALTH_PORT);
+      const dashboardHandler = createDashboardHandler(
+        dashboardState,
+        async () => healthRegistry.evaluate(),
+        logger,
+      );
+      healthServer = await createHealthServer(healthRegistry, {
+        port: cfg.HEALTH_PORT,
+        extraHandler: dashboardHandler,
+      });
       logger.info('health server listening', { port: cfg.HEALTH_PORT });
     } catch (err) {
       logger.error('health server failed to start', { err: String(err) });
@@ -730,7 +749,7 @@ async function main(): Promise<void> {
       const seenYesNoThisScan = new Set<string>();
 
       const nowMs = clock.nowMs();
-      lastScanTs = nowMs;
+      dashboardState.lastScanTs = nowMs;
       const views = store.views();
       executor.tick(nowMs, views);
 
@@ -758,6 +777,15 @@ async function main(): Promise<void> {
         const first = !seenKeys.has(dedupeKey);
         seenThisScan.add(dedupeKey);
         logSignal(log, s, first ? 'info' : 'debug');
+        pushSignal(dashboardState, {
+          tsMs: nowMs,
+          kind: 'cross-venue',
+          key: s.key,
+          buy: `${s.buyVenue} @ ${s.buyPriceUsd.toString()}`,
+          sell: `${s.sellVenue} @ ${s.sellPriceUsd.toString()}`,
+          spreadBps: s.spreadBps.toString(),
+          sizeUsd: s.sizeUsd.toString(),
+        });
 
         // Paper fills on first occurrence only to avoid re-executing the same
         // quote every scan. Repeated signals are counted for stats.
@@ -821,6 +849,15 @@ async function main(): Promise<void> {
         const first = !seenDigitalKeys.has(dedupeKey);
         seenDigitalThisScan.add(dedupeKey);
         if (first) logDigitalSignal(log, s);
+        pushSignal(dashboardState, {
+          tsMs: nowMs,
+          kind: 'digital-vs-vanilla',
+          key: s.key,
+          buy: s.vanillaVenue,
+          sell: 'polymarket',
+          spreadBps: s.edge.div(s.modelPrice).abs().mul(10_000).toString(),
+          sizeUsd: s.polymarketPrice.mul(100).toString(),
+        });
         // Observational only: hedging a Polymarket digital with vanilla options
         // requires a call-spread replication book that is not modelled yet.
       }
@@ -833,6 +870,15 @@ async function main(): Promise<void> {
         const first = !seenYesNoKeys.has(dedupeKey);
         seenYesNoThisScan.add(dedupeKey);
         logYesNoSignal(log, s);
+        pushSignal(dashboardState, {
+          tsMs: nowMs,
+          kind: 'yes-no-parity',
+          key: s.marketKey,
+          buy: s.direction === 'buy-both' ? 'yes' : 'no',
+          sell: s.direction === 'buy-both' ? 'no' : 'yes',
+          spreadBps: s.edge.mul(10_000).toString(),
+          sizeUsd: undefined,
+        });
         if (!first) continue;
 
         const intent = yesNoParityIntent(s, store);
@@ -893,7 +939,7 @@ async function main(): Promise<void> {
   scheduleScan();
 
   const statsTimer = setInterval(() => {
-    logger.info('trader stats', {
+    dashboardState.latestStats = {
       instruments: store.views().length,
       signals: signalCount,
       executed: executedCount,
@@ -901,7 +947,8 @@ async function main(): Promise<void> {
       digitalSignals: digitalSignalCount,
       yesNoSignals: yesNoSignalCount,
       oms: executor.omsStats(),
-    });
+    };
+    logger.info('trader stats', dashboardState.latestStats);
     signalCount = 0;
     executedCount = 0;
     riskRejectCount = 0;
@@ -912,7 +959,8 @@ async function main(): Promise<void> {
   const reportTimer = setInterval(() => {
     const nowMs = clock.nowMs();
     const snap = executor.portfolio.snapshot(store.views());
-    logger.info('paper portfolio summary', {
+    dashboardState.latestPortfolioSummary = {
+      tsMs: nowMs,
       openPositions: snap.openPositions,
       grossNotionalUsd: snap.grossNotionalUsd.toString(),
       realizedPnlUsd: snap.realizedPnlUsd.toString(),
@@ -922,7 +970,8 @@ async function main(): Promise<void> {
       perVenue: snap.perVenue.map((v) => ({ key: v.key, ...fmtExposure(v) })),
       perUnderlying: snap.perUnderlying.map((u) => ({ key: u.key, ...fmtExposure(u) })),
       oms: executor.omsStats(),
-    });
+    };
+    logger.info('paper portfolio summary', dashboardState.latestPortfolioSummary);
     void persistPortfolioSnapshot(audit, snap).catch(() => {});
 
     const metrics: MetricsSnapshot = {
