@@ -11,22 +11,6 @@ import type {
 import { canonicalKeyOf, contractsToCoin, priceToUsd } from './normalize.js';
 
 /** Per-venue quote on one canonical instrument, USD-normalized (read model). */
-export interface VenueQuote {
-  venue: Venue;
-  instrumentId: string;
-  bidUsd: Decimal | null;
-  askUsd: Decimal | null;
-  /** Size at best bid/ask, coin notional */
-  bidSizeCoin: Decimal | null;
-  askSizeCoin: Decimal | null;
-  markUsd: Decimal | null;
-  markIv: Decimal | null;
-  indexPriceUsd: Decimal | null;
-  /** Contract multiplier used to convert sizeCoin to/from contracts. */
-  contractMultiplier: Decimal;
-  tsMs: number;
-  recvMs: number;
-}
 
 /** Consolidated cross-venue view of one canonical option contract. */
 export interface InstrumentView {
@@ -58,7 +42,28 @@ interface MutableQuote {
   mark: Decimal | null;
   markIv: Decimal | null;
   indexPriceUsd: Decimal | null;
+  /** Venue-specific instrument metadata copied from the Instrument record. */
+  instrumentMetadata: Record<string, string>;
   /** Highest timestamp/recv across all sources; used for freshness checks. */
+  tsMs: number;
+  recvMs: number;
+}
+
+export interface VenueQuote {
+  venue: Venue;
+  instrumentId: string;
+  bidUsd: Decimal | null;
+  askUsd: Decimal | null;
+  /** Size at best bid/ask, coin notional */
+  bidSizeCoin: Decimal | null;
+  askSizeCoin: Decimal | null;
+  markUsd: Decimal | null;
+  markIv: Decimal | null;
+  indexPriceUsd: Decimal | null;
+  /** Contract multiplier used to convert sizeCoin to/from contracts. */
+  contractMultiplier: Decimal;
+  /** Venue-specific instrument metadata (e.g. Polymarket tokenId, tickSize, negRisk). */
+  instrumentMetadata?: Record<string, string>;
   tsMs: number;
   recvMs: number;
 }
@@ -128,6 +133,7 @@ export class MarketDataStore {
         instrumentId: inst.id,
         quoteCurrency: inst.quoteCurrency,
         multiplier: inst.contractMultiplier,
+        instrumentMetadata: inst.metadata ?? {},
         tickerBid: null,
         tickerAsk: null,
         tickerTsMs: 0,
@@ -246,6 +252,7 @@ export class MarketDataStore {
       markIv: q.markIv,
       indexPriceUsd: q.indexPriceUsd,
       contractMultiplier: q.multiplier,
+      instrumentMetadata: q.instrumentMetadata,
       tsMs: q.tsMs,
       recvMs: q.recvMs,
     };

@@ -24,6 +24,7 @@ import {
 import {
   DeribitOrderGateway,
   LiveOrderSender,
+  PolymarketOrderGateway,
   StubOrderGateway,
   type OrderGateway,
 } from '@optarb/live';
@@ -571,6 +572,15 @@ async function main(): Promise<void> {
               clientId: cfg.DERIBIT_API_KEY!,
               clientSecret: cfg.DERIBIT_API_SECRET!,
               testnet: true,
+              logger,
+            }),
+          ] as const;
+        }
+        if (venue === 'polymarket' && cfg.POLYMARKET_PRIVATE_KEY) {
+          return [
+            venue,
+            new PolymarketOrderGateway({
+              privateKey: cfg.POLYMARKET_PRIVATE_KEY,
               logger,
             }),
           ] as const;

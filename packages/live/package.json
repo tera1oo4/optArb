@@ -11,7 +11,9 @@
     "@optarb/execution": "workspace:*",
     "@optarb/marketdata": "workspace:*",
     "@optarb/persistence": "workspace:*",
-    "@optarb/venues": "workspace:*"
+    "@optarb/venues": "workspace:*",
+    "@polymarket/clob-client-v2": "^1.1.0",
+    "viem": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

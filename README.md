@@ -84,7 +84,10 @@ A gated live-trading scaffold lives in `@optarb/live`:
 
 - `LIVE_TRADING=true` alone is **not enough** — the operator must also set `LIVE_TRADING_CONFIRMED=true`, otherwise the trader exits on startup.
 - Live mode requires `OMS_ENABLED=true` and routes order commands through venue `OrderGateway` adapters.
-- The default build ships with **stub gateways** that log and reject every order, so no real API calls are made unless a real adapter is explicitly injected.
+- Real adapters currently implemented:
+  - **Deribit** testnet — set `DERIBIT_API_KEY` + `DERIBIT_API_SECRET`.
+  - **Polymarket** production CLOB — set `POLYMARKET_PRIVATE_KEY`. There is no testnet; this spends real USDC on Polygon.
+- Any venue without credentials uses a **stub gateway** that logs and rejects orders, so no real API calls are made unless explicitly configured.
 - Kill switch is fail-closed: any Redis/read error blocks new orders.
 - Edge-after-fees is enforced for all two-legged intents (cross-venue, digital-vs-vanilla, YES/NO-parity) before an order can be sent.
 

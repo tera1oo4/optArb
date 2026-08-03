@@ -67,6 +67,7 @@ export class LiveOrderSender implements OrderCommandSender {
       priceUsd: leg.requestedPriceUsd,
       indexPriceUsd: quote?.indexPriceUsd ?? leg.indexPriceUsd ?? undefined,
       contractMultiplier: quote?.contractMultiplier ?? undefined,
+      metadata: quote?.instrumentMetadata,
       signalId: attempt.signalId,
       attemptId: attempt.id,
       legIndex,

@@ -141,6 +141,8 @@ export class PolymarketConnector extends BaseWsConnector implements VenueConnect
     endDate?: string;
     outcomes: string;
     clobTokenIds: string;
+    negRisk?: boolean;
+    minimumTickSize?: string;
   }): Instrument[] {
     const parsed = parsePolymarketQuestion(m.question);
     if (parsed.underlying === null || !this.config.underlyings.includes(parsed.underlying)) {
@@ -179,6 +181,8 @@ export class PolymarketConnector extends BaseWsConnector implements VenueConnect
           question: m.question,
           outcome,
           parseable: String(parsed.parseable),
+          negRisk: String(m.negRisk ?? false),
+          tickSize: m.minimumTickSize ?? '0.001',
         },
       });
     }

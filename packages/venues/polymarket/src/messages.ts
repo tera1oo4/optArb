@@ -19,6 +19,7 @@ export const GammaMarketSchema = z
     closed: z.boolean().optional(),
     acceptingOrders: z.boolean().optional(),
     negRisk: z.boolean().optional(),
+    minimumTickSize: z.string().optional(),
   })
   .passthrough();
 

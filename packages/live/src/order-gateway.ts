@@ -17,6 +17,8 @@ export interface OrderRequest {
   indexPriceUsd?: Decimal;
   /** Optional contract multiplier for adapters that need sizeCoin → contracts. */
   contractMultiplier?: Decimal;
+  /** Venue-specific instrument metadata (e.g. Polymarket tokenId/tickSize/negRisk). */
+  metadata?: Record<string, string>;
   signalId: string;
   attemptId: string;
   legIndex: number;
