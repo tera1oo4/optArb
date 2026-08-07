@@ -45,6 +45,8 @@ const InstrumentsResponseSchema = z.object({
         strike: z.number().optional(),
         option_type: z.enum(['call', 'put']).optional(),
         contract_size: z.number().optional(),
+        tick_size: z.number().optional(),
+        min_trade_amount: z.number().optional(),
         is_active: z.boolean(),
       })
       .passthrough(),
@@ -112,6 +114,10 @@ export class DeribitConnector extends BaseWsConnector implements VenueConnector 
         contractMultiplier: dec(i.contract_size ?? 1),
         quoteCurrency: this.config.currency,
         settleCurrency: this.config.currency,
+        metadata: {
+          ...(i.tick_size != null ? { tickSize: String(i.tick_size) } : {}),
+          ...(i.min_trade_amount != null ? { minTradeAmount: String(i.min_trade_amount) } : {}),
+        },
       };
       this.ctx.instruments.set(i.instrument_name, instrument);
       return instrument;

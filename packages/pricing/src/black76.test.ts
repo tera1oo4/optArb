@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { dec, type Decimal } from '@optarb/core';
 import {
   black76D1D2,
+  black76Delta,
   black76Price,
   digitalCallPrice,
   digitalPutPrice,
@@ -160,6 +161,70 @@ describe('digital prices', () => {
     const df = discountFactor(base.rate, base.timeToExpiryYears);
     expectClose(digitalCallPrice({ ...base, forward: dec('105') }), df.toString(), '1e-15');
     expect(digitalCallPrice({ ...base, forward: dec('95') }).toString()).toBe('0');
+  });
+});
+
+describe('black76Delta', () => {
+  it('matches the analytic Black-Scholes delta N(d1) / N(d1)-1', () => {
+    const base = {
+      forward: dec('105'),
+      strike: dec('100'),
+      vol: dec('0.36'),
+      timeToExpiryYears: dec('0.5'),
+      rate: dec('0.1'),
+    };
+    const d = black76D1D2(base.forward, base.strike, base.vol, base.timeToExpiryYears)!;
+    const nd1 = normalCdf(d.d1);
+    expectClose(black76Delta({ ...base, type: 'call' }), nd1.toString(), '1e-15');
+    expectClose(black76Delta({ ...base, type: 'put' }), nd1.sub(1).toString(), '1e-15');
+  });
+
+  it('call delta minus put delta equals 1 (put-call parity on delta)', () => {
+    const base = {
+      forward: dec('98'),
+      strike: dec('100'),
+      vol: dec('0.5'),
+      timeToExpiryYears: dec('0.25'),
+      rate: dec('0'),
+    };
+    const call = black76Delta({ ...base, type: 'call' });
+    const put = black76Delta({ ...base, type: 'put' });
+    expectClose(call.sub(put), '1', '1e-15');
+  });
+
+  it('agrees with a finite-difference of price wrt forward when r=0', () => {
+    // With r=0 the forward delta equals the spot delta, so we can validate
+    // black76Delta against a central difference of black76Price wrt forward.
+    const base = {
+      forward: dec('100'),
+      strike: dec('110'),
+      vol: dec('0.4'),
+      timeToExpiryYears: dec('0.75'),
+      rate: dec('0'),
+    };
+    const h = dec('0.01');
+    for (const type of ['call', 'put'] as const) {
+      const up = black76Price({ ...base, forward: base.forward.add(h), type });
+      const down = black76Price({ ...base, forward: base.forward.sub(h), type });
+      const numeric = up.sub(down).div(h.mul(2));
+      expectClose(black76Delta({ ...base, type }), numeric.toString(), '1e-4');
+    }
+  });
+
+  it('is ~1 for a deep ITM call and ~-1 for a deep ITM put', () => {
+    const base = { strike: dec('100'), vol: dec('0.3'), timeToExpiryYears: dec('0.5'), rate: dec('0.05') };
+    expect(black76Delta({ ...base, forward: dec('400'), type: 'call' }).gt(dec('0.99'))).toBe(true);
+    expect(black76Delta({ ...base, forward: dec('25'), type: 'put' }).lt(dec('-0.99'))).toBe(true);
+  });
+
+  it('degenerates to a step at expiry (t <= 0) and zero vol', () => {
+    const atExpiry = { strike: dec('100'), vol: dec('0.3'), timeToExpiryYears: dec('0'), rate: dec('0') };
+    expect(black76Delta({ ...atExpiry, forward: dec('101'), type: 'call' }).toString()).toBe('1');
+    expect(black76Delta({ ...atExpiry, forward: dec('99'), type: 'call' }).toString()).toBe('0');
+    expect(black76Delta({ ...atExpiry, forward: dec('99'), type: 'put' }).toString()).toBe('-1');
+    const zeroVol = { strike: dec('100'), vol: dec('0'), timeToExpiryYears: dec('1'), rate: dec('0.05') };
+    expect(black76Delta({ ...zeroVol, forward: dec('120'), type: 'call' }).toString()).toBe('1');
+    expect(black76Delta({ ...zeroVol, forward: dec('80'), type: 'put' }).toString()).toBe('-1');
   });
 });
 

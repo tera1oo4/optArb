@@ -7,6 +7,12 @@ const MS_PER_YEAR = 31_557_600_000;
 
 export interface DigitalVsVanillaSignal {
   kind: 'digital-vs-vanilla';
+  /**
+   * Model-based, NOT a locked arbitrage. The model price is a flat-vol Black-76
+   * digital (DF·N(d2)) with no volatility-skew term, so `edge` carries a known
+   * bias and this signal is observational only — never routed to execution.
+   */
+  model: true;
   /** Binary view key (`binary:BTC:...:call`) */
   key: string;
   /** Matching vanilla view key the model price was derived from */
@@ -80,7 +86,7 @@ export class DigitalVsVanillaDetector {
       // This keeps the Black-76 model internally consistent instead of passing
       // the spot index directly as the forward while still discounting by r.
       const rateTimesT = this.config.rate.mul(timeToExpiryYears);
-      const forwardUsd = source.indexPriceUsd!.mul(dec(Math.exp(rateTimesT.toNumber())));
+      const forwardUsd = source.indexPriceUsd!.mul(rateTimesT.exp());
 
       const modelPrice = digitalCallPrice({
         forward: forwardUsd,
@@ -95,6 +101,7 @@ export class DigitalVsVanillaDetector {
 
       signals.push({
         kind: 'digital-vs-vanilla',
+        model: true,
         key: view.key,
         vanillaKey: vanilla.key,
         instrumentId: poly.instrumentId,

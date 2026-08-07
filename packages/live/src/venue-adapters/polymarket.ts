@@ -11,7 +11,7 @@ import {
 } from '@polymarket/clob-client-v2';
 
 import { dec, type Logger, type Venue } from '@optarb/core';
-import type { GatewayOrderEvent, OrderGateway, OrderRequest } from '../order-gateway.js';
+import type { GatewayOrderEvent, OrderGateway, OrderRequest, TimeInForce } from '../order-gateway.js';
 
 export interface PolymarketGatewayConfig {
   /** Hex private key with or without 0x prefix. Controls real USDC funds. */
@@ -72,7 +72,7 @@ export class PolymarketOrderGateway implements OrderGateway {
       const response = await client.createAndPostOrder(
         { tokenID: tokenId, side, price, size },
         { tickSize: tickSize as TickSize, negRisk },
-        OrderType.GTC,
+        polymarketOrderType(req.timeInForce),
       );
 
       if (response.errorMsg || !response.orderID) {
@@ -211,6 +211,19 @@ export class PolymarketOrderGateway implements OrderGateway {
 function tokenIdFromInstrumentId(instrumentId: string): string {
   const idx = instrumentId.indexOf(':');
   return idx >= 0 ? instrumentId.slice(idx + 1) : instrumentId;
+}
+
+/**
+ * Map the normalised TIF to a Polymarket order type. Arbitrage legs use FAK
+ * (fill-and-kill = IOC): take whatever is marketable now, cancel the rest, so
+ * no order ever rests on the book and strands the other leg. `gtc` is only for
+ * deliberate resting orders. FOK maps to FAK when the SDK lacks a FOK type.
+ */
+function polymarketOrderType(tif: TimeInForce | undefined): OrderType {
+  const types = OrderType as unknown as Record<string, OrderType>;
+  if (tif === 'gtc') return OrderType.GTC;
+  // Prefer FAK (IOC); fall back to GTC only if the SDK build lacks it.
+  return types.FAK ?? types.FOK ?? OrderType.GTC;
 }
 
 function normalizePrivateKey(key: string): string {

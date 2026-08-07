@@ -74,10 +74,32 @@ export function digitalCallPrice(p: DigitalParams): Decimal {
   return df.mul(normalCdf(d.d2));
 }
 
-/** Black-76 digital put price = DF * N(-d2); pays 1 iff forward < strike. */
+/**
+ * Black-76 digital put price = DF * N(-d2); pays 1 iff forward < strike. */
 export function digitalPutPrice(p: DigitalParams): Decimal {
   const df = discountFactor(p.rate, p.timeToExpiryYears);
   const d = black76D1D2(p.forward, p.strike, p.vol, p.timeToExpiryYears);
   if (d === null) return p.forward.lt(p.strike) ? df : dec(0);
   return df.mul(normalCdf(d.d2.neg()));
+}
+
+/**
+ * Spot delta of a Black-76 option — the hedge ratio against the underlying
+ * (perp/future that tracks spot), in coin per 1 coin of option notional.
+ *
+ * For a forward F = S·e^{rT} the discount factor and the dF/dS = e^{rT} drift
+ * cancel, so the spot delta collapses to the Black-Scholes delta: N(d1) for a
+ * call, N(d1) − 1 for a put. Range: [0, 1] calls, [−1, 0] puts.
+ *
+ * Degenerate cases (t <= 0 or vol <= 0): the payoff is deterministic, so delta
+ * is ±1 when in-the-money and 0 otherwise.
+ */
+export function black76Delta(p: Black76Params): Decimal {
+  const d = black76D1D2(p.forward, p.strike, p.vol, p.timeToExpiryYears);
+  if (d === null) {
+    if (p.type === 'call') return p.forward.gt(p.strike) ? dec(1) : dec(0);
+    return p.forward.lt(p.strike) ? dec(-1) : dec(0);
+  }
+  const nd1 = normalCdf(d.d1);
+  return p.type === 'call' ? nd1 : nd1.sub(1);
 }

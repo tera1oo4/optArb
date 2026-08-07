@@ -8,6 +8,10 @@ export interface DeribitGatewayConfig {
   logger?: Logger;
 }
 
+/** Fallbacks when the instrument metadata carries no venue spec. */
+const DEFAULT_TICK_SIZE = dec('0.0005');
+const DEFAULT_MIN_TRADE_AMOUNT = dec('0.1');
+
 interface Token {
   accessToken: string;
   refreshToken: string;
@@ -49,6 +53,10 @@ export class DeribitOrderGateway implements OrderGateway {
   private requestId = 0;
   private readonly pollTimers = new Map<string, NodeJS.Timeout>();
   private readonly reportedFilled = new Map<string, Decimal>();
+  /** Cumulative avg×filled (coin) per order, to derive each fill's marginal price. */
+  private readonly reportedNotionalCoin = new Map<string, Decimal>();
+  /** Cumulative commission (coin) per order, to derive each fill's marginal fee. */
+  private readonly reportedCommissionCoin = new Map<string, Decimal>();
 
   constructor(config: DeribitGatewayConfig) {
     this.config = config;
@@ -70,13 +78,33 @@ export class DeribitOrderGateway implements OrderGateway {
       }
 
       const instrumentName = venueSymbolOf(req.instrumentId);
-      const amountContracts = req.sizeCoin.div(req.contractMultiplier).toDecimalPlaces(0);
-      if (amountContracts.lte(0)) {
-        throw new Error(`invalid amount ${amountContracts.toString()} for ${instrumentName}`);
+
+      const minTradeAmount = req.metadata?.minTradeAmount
+        ? dec(req.metadata.minTradeAmount)
+        : DEFAULT_MIN_TRADE_AMOUNT;
+      const tickSize = req.metadata?.tickSize ? dec(req.metadata.tickSize) : DEFAULT_TICK_SIZE;
+
+      // Round the contract amount DOWN to the venue's min-trade-amount step so
+      // we never over-fill a leg (which would break the hedge ratio). Deribit
+      // BTC/ETH options step in 0.1; a naive round-to-integer both rejects
+      // sub-0.5 orders and silently changes the size the risk engine approved.
+      const rawContracts = req.sizeCoin.div(req.contractMultiplier);
+      const amountContracts = floorToStep(rawContracts, minTradeAmount);
+      if (amountContracts.lt(minTradeAmount)) {
+        throw new Error(
+          `amount ${rawContracts.toString()} below min ${minTradeAmount.toString()} for ${instrumentName}`,
+        );
       }
 
-      // Deribit option prices are denominated in the underlying coin.
-      const priceCoin = req.priceUsd.div(req.indexPriceUsd);
+      // Deribit option prices are denominated in the underlying coin. Snap to
+      // the tick size in the direction that does NOT improve our price (buys
+      // round the limit up, sells round it down) so the order stays marketable
+      // and the venue does not reject an off-tick price.
+      const rawPriceCoin = req.priceUsd.div(req.indexPriceUsd);
+      const priceCoin = snapPriceToTick(rawPriceCoin, tickSize, req.side);
+      if (priceCoin.lte(0)) {
+        throw new Error(`invalid price ${priceCoin.toString()} for ${instrumentName}`);
+      }
 
       const params: Record<string, unknown> = {
         instrument_name: instrumentName,
@@ -84,8 +112,10 @@ export class DeribitOrderGateway implements OrderGateway {
         amount: amountContracts.toNumber(),
         price: priceCoin.toNumber(),
         type: 'limit',
-        label: `optarb:${req.signalId}`,
+        time_in_force: deribitTimeInForce(req.timeInForce),
+        label: `optarb:${req.attemptId}:${req.legIndex}`,
       };
+      if (req.reduceOnly) params.reduce_only = true;
 
       const res = await this.call('private/place_order', params);
       const order = parseOrder(res);
@@ -99,6 +129,18 @@ export class DeribitOrderGateway implements OrderGateway {
         tsMs: Date.now(),
         exchangeOrderId: orderId,
       });
+
+      // IOC/FOK orders resolve at placement — the place_order response already
+      // carries the immediate fill/cancel. Process it now instead of waiting for
+      // the first poll; the reportedFilled dedup keeps polling from re-emitting.
+      this.handleOrderUpdate(orderId, order, req, onEvent);
+      if (
+        order.order_state === 'filled' ||
+        order.order_state === 'cancelled' ||
+        order.order_state === 'rejected'
+      ) {
+        return;
+      }
 
       this.startPolling(orderId, instrumentName, req, onEvent);
     } catch (err) {
@@ -174,16 +216,34 @@ export class DeribitOrderGateway implements OrderGateway {
     const delta = filledAmount.sub(prevFilled);
 
     if (delta.gt(0)) {
-      const avgPriceCoin = order.average_price != null ? dec(order.average_price) : null;
+      const hasIndex = req.indexPriceUsd && !req.indexPriceUsd.isZero();
+
+      // Marginal (not cumulative) price of just this delta: back it out of the
+      // running notional so multi-fill orders attribute each chunk correctly.
+      const cumNotionalCoin =
+        order.average_price != null ? dec(order.average_price).mul(filledAmount) : null;
+      const prevNotionalCoin = this.reportedNotionalCoin.get(orderId) ?? dec(0);
+      const marginalPriceCoin =
+        cumNotionalCoin != null ? cumNotionalCoin.sub(prevNotionalCoin).div(delta) : null;
       const priceUsd =
-        avgPriceCoin && req.indexPriceUsd && !req.indexPriceUsd.isZero()
-          ? avgPriceCoin.mul(req.indexPriceUsd)
+        marginalPriceCoin && hasIndex
+          ? marginalPriceCoin.mul(req.indexPriceUsd!)
           : req.priceUsd;
+
+      // Marginal commission for this delta (Deribit reports it cumulatively in
+      // the coin); convert to USD via the index so live PnL is fee-accurate.
+      const cumCommissionCoin = order.commission != null ? dec(order.commission) : null;
+      const prevCommissionCoin = this.reportedCommissionCoin.get(orderId) ?? dec(0);
+      const feeUsd =
+        cumCommissionCoin && hasIndex
+          ? cumCommissionCoin.sub(prevCommissionCoin).mul(req.indexPriceUsd!)
+          : undefined;
 
       const eventBase = {
         tsMs: Date.now(),
         priceUsd,
         sizeCoin: delta.mul(req.contractMultiplier ?? 1),
+        ...(feeUsd != null ? { feeUsd } : {}),
       };
 
       if (order.order_state === 'filled') {
@@ -193,6 +253,8 @@ export class DeribitOrderGateway implements OrderGateway {
       }
 
       this.reportedFilled.set(orderId, filledAmount);
+      if (cumNotionalCoin != null) this.reportedNotionalCoin.set(orderId, cumNotionalCoin);
+      if (cumCommissionCoin != null) this.reportedCommissionCoin.set(orderId, cumCommissionCoin);
     }
 
     if (order.order_state === 'cancelled') {
@@ -239,13 +301,15 @@ export class DeribitOrderGateway implements OrderGateway {
   ): Promise<unknown> {
     const id = ++this.requestId;
     const body: RpcRequest = { jsonrpc: '2.0', id, method, params };
-    const url = token
-      ? `${this.baseUrl}/${method}?token=${encodeURIComponent(token)}`
-      : `${this.baseUrl}/${method}`;
 
-    const res = await fetch(url, {
+    // Authenticated calls send the bearer token in the Authorization header,
+    // never in the URL query string (query strings leak into proxy/access logs).
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(`${this.baseUrl}/${method}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     });
 
@@ -266,6 +330,7 @@ interface DeribitOrder {
   order_state: 'open' | 'filled' | 'cancelled' | 'rejected';
   filled_amount: number;
   average_price: number | null;
+  commission: number | null;
 }
 
 function parseOrder(result: unknown): DeribitOrder {
@@ -276,10 +341,42 @@ function parseOrder(result: unknown): DeribitOrder {
     order_state: String(order.order_state ?? 'open') as DeribitOrder['order_state'],
     filled_amount: Number(order.filled_amount ?? 0),
     average_price: order.average_price != null ? Number(order.average_price) : null,
+    commission: order.commission != null ? Number(order.commission) : null,
   };
 }
 
 function venueSymbolOf(instrumentId: string): string {
   const idx = instrumentId.indexOf(':');
   return idx >= 0 ? instrumentId.slice(idx + 1) : instrumentId;
+}
+
+/** Round `value` down to the nearest multiple of `step` (step > 0). */
+function floorToStep(value: Decimal, step: Decimal): Decimal {
+  if (step.lte(0)) return value;
+  return value.div(step).floor().mul(step);
+}
+
+/** Map the normalised TIF to Deribit's `time_in_force` values (default IOC). */
+function deribitTimeInForce(tif: OrderRequest['timeInForce']): string {
+  switch (tif) {
+    case 'fok':
+      return 'fill_or_kill';
+    case 'gtc':
+      return 'good_til_cancelled';
+    case 'ioc':
+    default:
+      return 'immediate_or_cancel';
+  }
+}
+
+/**
+ * Snap an option limit price to the venue tick. Rounds in the direction that
+ * does not improve our price — buys up, sells down — so the resulting limit is
+ * still marketable and never violates the guard price the risk engine approved.
+ */
+function snapPriceToTick(price: Decimal, tick: Decimal, side: 'buy' | 'sell'): Decimal {
+  if (tick.lte(0)) return price;
+  const steps = price.div(tick);
+  const rounded = side === 'buy' ? steps.ceil() : steps.floor();
+  return rounded.mul(tick);
 }

@@ -13,6 +13,8 @@ const BASE_CONFIG: RiskConfig = {
   RISK_MAX_DAILY_LOSS_USD: 5_000,
   RISK_MAX_QUOTE_AGE_MS: 2_000,
   RISK_MIN_EDGE_AFTER_FEES_BPS: 5,
+  RISK_MAX_INDEX_DIVERGENCE_BPS: 30,
+  RISK_MAX_LEG_SKEW_MS: 500,
   RISK_KILL_SWITCH: false,
 };
 
@@ -316,6 +318,48 @@ describe('RiskEngine', () => {
       emptyState(),
       1_500,
     );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('denies when the two legs quotes are skewed beyond the limit', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const intent = makeIntent([
+      leg('okx', 'buy', '1000', '1', { quoteRecvMs: 1_000 }),
+      leg('deribit', 'sell', '1100', '1', { quoteRecvMs: 1_600 }),
+    ]);
+    const result = await engine.check(intent, emptyState(), 1_700);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('leg quote skew'))).toBe(true);
+  });
+
+  it('allows legs quoted within the skew limit', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const intent = makeIntent([
+      leg('okx', 'buy', '1000', '1', { quoteRecvMs: 1_000 }),
+      leg('deribit', 'sell', '1100', '1', { quoteRecvMs: 1_400 }),
+    ]);
+    const result = await engine.check(intent, emptyState(), 1_500);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('denies when the two venues index prices diverge beyond the limit', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const intent = makeIntent([
+      leg('okx', 'buy', '1000', '1', { indexUsd: '64000' }),
+      leg('deribit', 'sell', '1100', '1', { indexUsd: '64500' }),
+    ]);
+    const result = await engine.check(intent, emptyState(), 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('index divergence'))).toBe(true);
+  });
+
+  it('skips the index-divergence guard when a leg has no index price', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const intent = makeIntent([
+      leg('polymarket', 'buy', '0.48', '1000', { indexUsd: null }),
+      leg('polymarket', 'sell', '0.52', '1000', { indexUsd: null }),
+    ]);
+    const result = await engine.check(intent, emptyState(), 1_500);
     expect(result.allowed).toBe(true);
   });
 

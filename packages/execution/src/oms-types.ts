@@ -76,6 +76,20 @@ export interface OrderCommandSender {
   cancel(attempt: OrderAttempt, legIndex: number, views: InstrumentView[], nowMs: number): void;
 }
 
+/**
+ * Pluggable policy invoked when a two-legged attempt enters leg-risk (one leg
+ * filled, the other unable to complete). Implemented outside this paper-only
+ * package (in `@optarb/live`) so the OMS engine never imports a venue order API.
+ *
+ * `onLegRisk` fires once when the attempt first crosses into leg-risk; `tick`
+ * fires on every OMS tick so the handler can advance its own work window
+ * (complete the second leg, unwind, or trip the kill switch).
+ */
+export interface LegRiskHandler {
+  onLegRisk(attempt: OrderAttempt, views: InstrumentView[], nowMs: number): void;
+  tick(views: InstrumentView[], nowMs: number): void;
+}
+
 export interface OmsStats {
   attemptsSubmitted: number;
   legRiskEvents: number;
@@ -88,4 +102,6 @@ export interface OmsEngineConfig {
   commandSender?: OrderCommandSender;
   logger?: Logger;
   feeSchedules?: FeeSchedules;
+  /** Optional leg-risk policy (hedge/unwind). Paper mode leaves it undefined. */
+  legRiskHandler?: LegRiskHandler;
 }

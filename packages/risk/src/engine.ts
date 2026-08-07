@@ -131,6 +131,12 @@ export class RiskEngine {
     const edgeReason = this.checkTwoLeggedEdge(intent);
     if (edgeReason) reasons.push(edgeReason);
 
+    const skewReason = this.checkLegSkew(intent);
+    if (skewReason) reasons.push(skewReason);
+
+    const indexReason = this.checkIndexDivergence(intent);
+    if (indexReason) reasons.push(indexReason);
+
     return reasons.length === 0 ? { allowed: true, reasons: [] } : { allowed: false, reasons };
   }
 
@@ -144,6 +150,42 @@ export class RiskEngine {
 
   private exposure(buckets: RiskExposure[], key: string): Decimal {
     return buckets.find((b) => b.key === key)?.notionalUsd ?? dec(0);
+  }
+
+  /**
+   * Reject a two-legged intent whose legs were quoted too far apart in time.
+   * Each leg comes from a different venue feed; a large gap means one side is
+   * stale relative to the other and the "edge" may already be gone.
+   */
+  private checkLegSkew(intent: ExecutionIntent): string | null {
+    if (intent.legs.length !== 2) return null;
+    const [a, b] = intent.legs;
+    if (!a || !b || a.quoteRecvMs === undefined || b.quoteRecvMs === undefined) return null;
+    const skewMs = Math.abs(a.quoteRecvMs - b.quoteRecvMs);
+    if (skewMs > this.config.RISK_MAX_LEG_SKEW_MS) {
+      return `leg quote skew ${skewMs}ms exceeds ${this.config.RISK_MAX_LEG_SKEW_MS}ms`;
+    }
+    return null;
+  }
+
+  /**
+   * Reject a cross-venue intent where the two venues disagree on the underlying
+   * index price by more than the allowed bps. Such a "spread" is an index-print
+   * artifact, not a tradable option mispricing. Legs without an index price
+   * (e.g. Polymarket) skip the check.
+   */
+  private checkIndexDivergence(intent: ExecutionIntent): string | null {
+    if (intent.legs.length !== 2) return null;
+    const [a, b] = intent.legs;
+    if (!a || !b) return null;
+    const ia = a.indexPriceUsd;
+    const ib = b.indexPriceUsd;
+    if (!ia || !ib || ia.lte(0) || ib.lte(0)) return null;
+    const divergenceBps = ia.sub(ib).abs().div(ia).mul(10_000);
+    if (divergenceBps.gt(this.config.RISK_MAX_INDEX_DIVERGENCE_BPS)) {
+      return `index divergence ${divergenceBps.toFixed(2)} bps between ${a.venue}/${b.venue} exceeds ${this.config.RISK_MAX_INDEX_DIVERGENCE_BPS}`;
+    }
+    return null;
   }
 
   private checkTwoLeggedEdge(intent: ExecutionIntent): string | null {

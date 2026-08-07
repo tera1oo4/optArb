@@ -2,6 +2,7 @@ export { normalCdf, normalPdf } from './normal.js';
 export {
   black76Price,
   black76D1D2,
+  black76Delta,
   digitalCallPrice,
   digitalPutPrice,
   discountFactor,

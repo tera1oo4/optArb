@@ -19,7 +19,7 @@ const mockClient = {
 vi.mock('@polymarket/clob-client-v2', () => {
   return {
     ClobClient: vi.fn().mockImplementation(() => mockClient),
-    OrderType: { GTC: 'GTC' },
+    OrderType: { GTC: 'GTC', FAK: 'FAK', FOK: 'FOK' },
     Side: { BUY: 'BUY', SELL: 'SELL' },
     Chain: { POLYGON: 137 },
   };
@@ -45,7 +45,7 @@ describe('PolymarketOrderGateway', () => {
     vi.clearAllMocks();
   });
 
-  it('submits a GTC order and emits ack + fill', async () => {
+  it('submits a marketable FAK (IOC) order by default and emits ack + fill', async () => {
     const gw = new PolymarketOrderGateway({ privateKey: DUMMY_PRIVATE_KEY });
     const events: { kind: string; exchangeOrderId?: string }[] = [];
 
@@ -61,10 +61,23 @@ describe('PolymarketOrderGateway', () => {
     expect(mockClient.createAndPostOrder).toHaveBeenCalledWith(
       expect.objectContaining({ tokenID: 'token-abc', side: 'BUY', price: 0.45, size: 5 }),
       expect.objectContaining({ tickSize: '0.001', negRisk: false }),
-      'GTC',
+      'FAK',
     );
     expect(events.some((e) => e.kind === 'ack' && e.exchangeOrderId === 'order-123')).toBe(true);
     expect(events.some((e) => e.kind === 'fill')).toBe(true);
+  });
+
+  it('submits a resting GTC order when timeInForce is gtc', async () => {
+    const gw = new PolymarketOrderGateway({ privateKey: DUMMY_PRIVATE_KEY });
+
+    await gw.submit({ ...baseReq(), timeInForce: 'gtc' }, () => {});
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(mockClient.createAndPostOrder).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      'GTC',
+    );
   });
 
   it('emits reject for invalid price', async () => {

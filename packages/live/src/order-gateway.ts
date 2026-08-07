@@ -1,5 +1,8 @@
 import type { Decimal, Side, Venue } from '@optarb/core';
 
+/** Order lifetime policy. Arbitrage legs default to IOC so nothing rests. */
+export type TimeInForce = 'ioc' | 'fok' | 'gtc';
+
 /**
  * Normalised order request sent to a venue order gateway.
  *
@@ -13,6 +16,14 @@ export interface OrderRequest {
   side: Side;
   sizeCoin: Decimal;
   priceUsd: Decimal;
+  /**
+   * Time-in-force. Arbitrage legs and hedges use `ioc` (marketable, no resting
+   * exposure); `fok` demands the full size or nothing; `gtc` is only for
+   * deliberate resting orders. Defaults to `ioc` when omitted.
+   */
+  timeInForce?: TimeInForce;
+  /** Reduce-only: the order may only shrink an existing position (unwind/hedge-off). */
+  reduceOnly?: boolean;
   /** Optional spot/index price for adapters that need to convert USD → coin price. */
   indexPriceUsd?: Decimal;
   /** Optional contract multiplier for adapters that need sizeCoin → contracts. */

@@ -32,6 +32,7 @@ export { OmsEngine } from './oms-engine.js';
 export type {
   LegOrder,
   LegOrderHistoryEntry,
+  LegRiskHandler,
   OmsEngineConfig,
   OmsStats,
   OrderAttempt,

@@ -5,6 +5,7 @@ import { computeFeeUsd, type FeeSchedules } from './fees.js';
 import type {
   LegOrder,
   LegOrderHistoryEntry,
+  LegRiskHandler,
   OmsEngineConfig,
   OmsStats,
   OrderAttempt,
@@ -60,6 +61,7 @@ export class OmsEngine {
   private readonly logger: Logger | undefined;
   private commandSender: OrderCommandSender | undefined;
   private readonly feeSchedules: FeeSchedules | undefined;
+  private readonly legRiskHandler: LegRiskHandler | undefined;
   private readonly timeoutMs: number;
   private readonly maxAttempts: number;
   private readonly stats: OmsStats = {
@@ -74,6 +76,7 @@ export class OmsEngine {
     this.commandSender = config.commandSender;
     this.logger = config.logger;
     this.feeSchedules = config.feeSchedules;
+    this.legRiskHandler = config.legRiskHandler;
   }
 
   /**
@@ -153,10 +156,13 @@ export class OmsEngine {
         attempt.legRiskAlerted = true;
         this.stats.legRiskEvents++;
         this.logLegRisk(attempt);
-        this.canHedge(attempt);
+        this.canHedge(attempt, views, nowMs);
       }
     }
     this.stats.stuckOrders = stuck;
+
+    // Drive the leg-risk policy (hedge/unwind work window) once per tick.
+    this.legRiskHandler?.tick(views, nowMs);
   }
 
   /**
@@ -176,9 +182,17 @@ export class OmsEngine {
     return false;
   }
 
-  /** Stub for future hedge/unwind policy. Emits a structured log for now. */
-  canHedge(attempt: OrderAttempt): void {
-    this.logger?.info('oms.can_hedge stub', {
+  /**
+   * Route a leg-risk attempt to the configured handler (hedge/unwind policy).
+   * With no handler (paper mode) this just emits a structured log — the paper
+   * portfolio already carries the one filled leg, so nothing else is needed.
+   */
+  canHedge(attempt: OrderAttempt, views: InstrumentView[], nowMs: number): void {
+    if (this.legRiskHandler) {
+      this.legRiskHandler.onLegRisk(attempt, views, nowMs);
+      return;
+    }
+    this.logger?.info('oms.leg_risk (no handler)', {
       attemptId: attempt.id,
       signalId: attempt.signalId,
       status: attempt.status,

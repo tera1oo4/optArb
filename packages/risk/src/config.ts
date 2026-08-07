@@ -12,6 +12,15 @@ export const RiskConfigSchema = z.object({
   RISK_MAX_DAILY_LOSS_USD: z.coerce.number().positive().default(5_000),
   RISK_MAX_QUOTE_AGE_MS: z.coerce.number().int().positive().default(2_000),
   RISK_MIN_EDGE_AFTER_FEES_BPS: z.coerce.number().nonnegative().default(5),
+  /**
+   * Max divergence between the two legs' venue index prices (bps). A cross-venue
+   * "spread" that is really just two venues printing different index prices is a
+   * phantom edge, not a mispricing — reject it. Only applies when both legs carry
+   * an index (option venues); Polymarket legs (null index) skip this check.
+   */
+  RISK_MAX_INDEX_DIVERGENCE_BPS: z.coerce.number().nonnegative().default(30),
+  /** Max age difference between the two legs' quotes (ms); guards stale-leg risk. */
+  RISK_MAX_LEG_SKEW_MS: z.coerce.number().int().nonnegative().default(500),
   RISK_KILL_SWITCH: z
     .enum(['true', 'false'])
     .default('false')
