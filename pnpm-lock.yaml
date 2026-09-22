@@ -381,6 +381,9 @@ importers:
       '@optarb/core':
         specifier: workspace:*
         version: link:../core
+      '@optarb/execution':
+        specifier: workspace:*
+        version: link:../execution
       '@optarb/marketdata':
         specifier: workspace:*
         version: link:../marketdata

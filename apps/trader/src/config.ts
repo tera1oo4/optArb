@@ -108,7 +108,13 @@ const EnvSchema = z
       .default('false')
       .transform((v) => v === 'true'),
 
-    /** Optional per-venue API credentials. Required only by real adapters (currently none in the stub scaffold). */
+    /** Deribit order gateway environment. true = testnet (safe default). */
+    DERIBIT_TESTNET: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+
+    /** Optional per-venue API credentials. Used by real order gateways (Deribit/Polymarket) when LIVE_TRADING=true. */
     DERIBIT_API_KEY: z.string().optional(),
     DERIBIT_API_SECRET: z.string().optional(),
     BYBIT_API_KEY: z.string().optional(),
@@ -127,8 +133,10 @@ const EnvSchema = z
     DIGITAL_MIN_DEVIATION: decimalString.default('0.03'),
     DIGITAL_RATE: decimalString.default('0.05'),
 
-    /** YES/NO parity detector (M3 / B wiring). */
-    YESNO_THRESHOLD: decimalString.default('0.02'),
+    /** YES/NO parity detector (M3 / B wiring). Buffer ABOVE Polymarket taker
+     * fees already netted out of edgeAfterFees — not a raw pre-fee threshold. */
+    YESNO_THRESHOLD: decimalString.default('0.005'),
+    YESNO_MIN_SIZE_USD: z.coerce.number().positive().default(50),
 
     /** Optional Postgres audit persistence (ADR-0005). If unset, trader runs without audit. */
     PERSIST_POSTGRES_URL: z.string().url().optional(),

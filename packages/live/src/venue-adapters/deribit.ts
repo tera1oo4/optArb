@@ -1,4 +1,4 @@
-import { dec, type Decimal, type Logger, type Venue } from '@optarb/core';
+import { dec, LiveClock, type Clock, type Decimal, type Logger, type Venue } from '@optarb/core';
 import type { GatewayOrderEvent, OrderGateway, OrderRequest } from '../order-gateway.js';
 
 export interface DeribitGatewayConfig {
@@ -6,6 +6,8 @@ export interface DeribitGatewayConfig {
   clientSecret: string;
   testnet?: boolean;
   logger?: Logger;
+  /** Clock for event timestamps (ADR-0004). Defaults to LiveClock. */
+  clock?: Clock;
 }
 
 /** Fallbacks when the instrument metadata carries no venue spec. */
@@ -48,6 +50,7 @@ interface RpcResponse {
 export class DeribitOrderGateway implements OrderGateway {
   readonly venue: Venue = 'deribit';
   private readonly config: DeribitGatewayConfig;
+  private readonly clock: Clock;
   private readonly baseUrl: string;
   private token: Token | null = null;
   private requestId = 0;
@@ -60,6 +63,7 @@ export class DeribitOrderGateway implements OrderGateway {
 
   constructor(config: DeribitGatewayConfig) {
     this.config = config;
+    this.clock = config.clock ?? new LiveClock();
     this.baseUrl =
       config.testnet !== false
         ? 'https://test.deribit.com/api/v2'
@@ -126,7 +130,7 @@ export class DeribitOrderGateway implements OrderGateway {
 
       onEvent({
         kind: 'ack',
-        tsMs: Date.now(),
+        tsMs: this.clock.nowMs(),
         exchangeOrderId: orderId,
       });
 
@@ -149,7 +153,7 @@ export class DeribitOrderGateway implements OrderGateway {
         instrumentId: req.instrumentId,
         err: message,
       });
-      onEvent({ kind: 'reject', tsMs: Date.now(), reason: message });
+      onEvent({ kind: 'reject', tsMs: this.clock.nowMs(), reason: message });
     }
   }
 
@@ -226,9 +230,7 @@ export class DeribitOrderGateway implements OrderGateway {
       const marginalPriceCoin =
         cumNotionalCoin != null ? cumNotionalCoin.sub(prevNotionalCoin).div(delta) : null;
       const priceUsd =
-        marginalPriceCoin && hasIndex
-          ? marginalPriceCoin.mul(req.indexPriceUsd!)
-          : req.priceUsd;
+        marginalPriceCoin && hasIndex ? marginalPriceCoin.mul(req.indexPriceUsd!) : req.priceUsd;
 
       // Marginal commission for this delta (Deribit reports it cumulatively in
       // the coin); convert to USD via the index so live PnL is fee-accurate.
@@ -240,7 +242,7 @@ export class DeribitOrderGateway implements OrderGateway {
           : undefined;
 
       const eventBase = {
-        tsMs: Date.now(),
+        tsMs: this.clock.nowMs(),
         priceUsd,
         sizeCoin: delta.mul(req.contractMultiplier ?? 1),
         ...(feeUsd != null ? { feeUsd } : {}),
@@ -258,14 +260,18 @@ export class DeribitOrderGateway implements OrderGateway {
     }
 
     if (order.order_state === 'cancelled') {
-      onEvent({ kind: 'cancel', tsMs: Date.now(), reason: 'cancelled by exchange or client' });
+      onEvent({
+        kind: 'cancel',
+        tsMs: this.clock.nowMs(),
+        reason: 'cancelled by exchange or client',
+      });
     } else if (order.order_state === 'rejected') {
-      onEvent({ kind: 'reject', tsMs: Date.now(), reason: 'order rejected by exchange' });
+      onEvent({ kind: 'reject', tsMs: this.clock.nowMs(), reason: 'order rejected by exchange' });
     }
   }
 
   private async ensureAuthenticated(): Promise<void> {
-    if (this.token && this.token.expiresAt > Date.now() + 60_000) return;
+    if (this.token && this.token.expiresAt > this.clock.nowMs() + 60_000) return;
 
     const result = (await this.rpc('public/auth', {
       grant_type: 'client_credentials',
@@ -285,7 +291,7 @@ export class DeribitOrderGateway implements OrderGateway {
     this.token = {
       accessToken: result.access_token,
       refreshToken: result.refresh_token ?? '',
-      expiresAt: Date.now() + (result.expires_in ?? 3600) * 1000,
+      expiresAt: this.clock.nowMs() + (result.expires_in ?? 3600) * 1000,
     };
   }
 

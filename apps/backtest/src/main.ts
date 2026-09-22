@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { resolve } from 'node:path';
 import pino from 'pino';
-import { dec, type Logger } from '@optarb/core';
+import { dec, LOG_REDACT_PATHS, type Logger } from '@optarb/core';
 import type { Venue } from '@optarb/core';
 import {
   AnalyticsEngine,
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
   }
 
   const cfg = loadConfig();
-  const log = pino({ level: cfg.LOG_LEVEL });
+  const log = pino({ level: cfg.LOG_LEVEL, redact: LOG_REDACT_PATHS });
 
   const engine = new BacktestEngine(toLogger(log));
   const result = await engine.run({
@@ -69,11 +69,22 @@ async function main(): Promise<void> {
       RISK_MAX_NOTIONAL_GLOBAL_USD: cfg.RISK_MAX_NOTIONAL_GLOBAL_USD,
       RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: cfg.RISK_MAX_EXPOSURE_PER_UNDERLYING_USD,
       RISK_MAX_DAILY_LOSS_USD: cfg.RISK_MAX_DAILY_LOSS_USD,
+      RISK_MAX_DAILY_DRAWDOWN_USD: cfg.RISK_MAX_DAILY_DRAWDOWN_USD,
       RISK_MAX_QUOTE_AGE_MS: cfg.RISK_MAX_QUOTE_AGE_MS,
       RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
       RISK_MAX_INDEX_DIVERGENCE_BPS: cfg.RISK_MAX_INDEX_DIVERGENCE_BPS,
       RISK_MAX_LEG_SKEW_MS: cfg.RISK_MAX_LEG_SKEW_MS,
       RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
+      RISK_MAX_DELTA_PER_UNDERLYING: cfg.RISK_MAX_DELTA_PER_UNDERLYING,
+      RISK_MAX_VEGA_PER_UNDERLYING_USD: cfg.RISK_MAX_VEGA_PER_UNDERLYING_USD,
+      RISK_MAX_GAMMA_PER_UNDERLYING_USD: cfg.RISK_MAX_GAMMA_PER_UNDERLYING_USD,
+      RISK_MIN_MARGIN_HEADROOM_USD: cfg.RISK_MIN_MARGIN_HEADROOM_USD,
+      RISK_MAX_POLYMARKET_SETTLEMENT_USD: cfg.RISK_MAX_POLYMARKET_SETTLEMENT_USD,
+      RISK_AUTO_KILL_HEARTBEAT_IDLE_MS: cfg.RISK_AUTO_KILL_HEARTBEAT_IDLE_MS,
+      RISK_AUTO_KILL_SEQUENCE_GAPS: cfg.RISK_AUTO_KILL_SEQUENCE_GAPS,
+      RISK_AUTO_KILL_SEQUENCE_WINDOW_MS: cfg.RISK_AUTO_KILL_SEQUENCE_WINDOW_MS,
+      RISK_AUTO_KILL_REJECT_COUNT: cfg.RISK_AUTO_KILL_REJECT_COUNT,
+      RISK_AUTO_KILL_REJECT_WINDOW_MS: cfg.RISK_AUTO_KILL_REJECT_WINDOW_MS,
     },
     feeSchedules: resolveFeeSchedules(feeOverrides(cfg)),
     paperMaxNotionalUsd: dec(cfg.PAPER_MAX_NOTIONAL_USD),

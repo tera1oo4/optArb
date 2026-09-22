@@ -240,7 +240,17 @@ export class BacktestEngine {
       if (!intent) continue;
 
       const snapshot = executor.portfolio.snapshot(views);
-      const riskState = riskStateFromSnapshot(snapshot, snapshot.realizedPnlUsd);
+      // Backtest replay has no day/session boundary (it's a single continuous
+      // run), so there's no realized-vs-daily distinction to track separately.
+      // netPnlUsd (realized + unrealized − fees) is used for both the
+      // realized-loss and the mark-to-market drawdown checks; this is the
+      // conservative choice since it also reflects unrealized losses on stuck
+      // legs, which the risk engine's daily-drawdown gate exists to catch.
+      const riskState = riskStateFromSnapshot(
+        snapshot,
+        snapshot.realizedPnlUsd,
+        snapshot.netPnlUsd,
+      );
       const riskResult = await riskEngine.check(intent, riskState, nowMs);
       if (!riskResult.allowed) {
         addRejects(1);

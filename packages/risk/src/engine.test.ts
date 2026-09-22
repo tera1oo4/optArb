@@ -6,16 +6,27 @@ import { RiskEngine, riskStateFromSnapshot, type KillSwitchProvider } from './en
 import type { RiskState } from './types.js';
 
 const BASE_CONFIG: RiskConfig = {
-  RISK_MAX_NOTIONAL_PER_TRADE_USD: 10_000,
-  RISK_MAX_NOTIONAL_PER_VENUE_USD: 50_000,
-  RISK_MAX_NOTIONAL_GLOBAL_USD: 200_000,
-  RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: 100_000,
-  RISK_MAX_DAILY_LOSS_USD: 5_000,
+  RISK_MAX_NOTIONAL_PER_TRADE_USD: dec('10000'),
+  RISK_MAX_NOTIONAL_PER_VENUE_USD: dec('50000'),
+  RISK_MAX_NOTIONAL_GLOBAL_USD: dec('200000'),
+  RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: dec('100000'),
+  RISK_MAX_DAILY_LOSS_USD: dec('5000'),
+  RISK_MAX_DAILY_DRAWDOWN_USD: dec('7500'),
   RISK_MAX_QUOTE_AGE_MS: 2_000,
-  RISK_MIN_EDGE_AFTER_FEES_BPS: 5,
-  RISK_MAX_INDEX_DIVERGENCE_BPS: 30,
+  RISK_MIN_EDGE_AFTER_FEES_BPS: dec('5'),
+  RISK_MAX_INDEX_DIVERGENCE_BPS: dec('30'),
   RISK_MAX_LEG_SKEW_MS: 500,
   RISK_KILL_SWITCH: false,
+  RISK_MAX_DELTA_PER_UNDERLYING: undefined,
+  RISK_MAX_VEGA_PER_UNDERLYING_USD: undefined,
+  RISK_MAX_GAMMA_PER_UNDERLYING_USD: undefined,
+  RISK_MIN_MARGIN_HEADROOM_USD: undefined,
+  RISK_MAX_POLYMARKET_SETTLEMENT_USD: undefined,
+  RISK_AUTO_KILL_HEARTBEAT_IDLE_MS: 60_000,
+  RISK_AUTO_KILL_SEQUENCE_GAPS: 3,
+  RISK_AUTO_KILL_SEQUENCE_WINDOW_MS: 60_000,
+  RISK_AUTO_KILL_REJECT_COUNT: 5,
+  RISK_AUTO_KILL_REJECT_WINDOW_MS: 60_000,
 };
 
 function leg(
@@ -63,6 +74,7 @@ function emptyState(): RiskState {
     perUnderlying: [],
     grossNotionalUsd: dec(0),
     dailyRealizedPnlUsd: dec(0),
+    dailyNetPnlUsd: dec(0),
   };
 }
 
@@ -71,6 +83,7 @@ function stateWith(args: {
   perVenue?: Array<{ key: Venue; notionalUsd: string }>;
   perUnderlying?: Array<{ key: Underlying; notionalUsd: string }>;
   dailyRealizedPnlUsd?: string;
+  dailyNetPnlUsd?: string;
 }): RiskState {
   return {
     positions: [],
@@ -79,6 +92,7 @@ function stateWith(args: {
       args.perUnderlying?.map((u) => ({ key: u.key, notionalUsd: dec(u.notionalUsd) })) ?? [],
     grossNotionalUsd: dec(args.grossNotionalUsd ?? '0'),
     dailyRealizedPnlUsd: dec(args.dailyRealizedPnlUsd ?? '0'),
+    dailyNetPnlUsd: dec(args.dailyNetPnlUsd ?? args.dailyRealizedPnlUsd ?? '0'),
   };
 }
 
@@ -178,7 +192,7 @@ describe('RiskEngine', () => {
 
   it('denies when a leg exceeds the per-trade notional limit', async () => {
     const engine = new RiskEngine(
-      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: 1_000 },
+      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: dec('1000') },
       DEFAULT_FEE_SCHEDULES,
     );
     const result = await engine.check(
@@ -204,7 +218,7 @@ describe('RiskEngine', () => {
 
   it('denies when the global notional limit is breached', async () => {
     const engine = new RiskEngine(
-      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_GLOBAL_USD: 5_000 },
+      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_GLOBAL_USD: dec('5000') },
       DEFAULT_FEE_SCHEDULES,
     );
     const result = await engine.check(
@@ -281,7 +295,7 @@ describe('RiskEngine', () => {
     expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
   });
 
-  it('applies edge-after-fees to non-cross-venue intents', async () => {
+  it('denies non-cross-venue, non-parity intents (fail-closed, digital-vs-vanilla is observational only)', async () => {
     const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
     const result = await engine.check(
       makeIntent(
@@ -292,10 +306,10 @@ describe('RiskEngine', () => {
       1_500,
     );
     expect(result.allowed).toBe(false);
-    expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
+    expect(result.reasons.some((r) => r.toLowerCase().includes('unknown signal kind'))).toBe(true);
   });
 
-  it('skips edge-after-fees when fee schedules are missing for a leg venue', async () => {
+  it('denies when a fee schedule is missing for a leg venue (fail-closed)', async () => {
     const engine = new RiskEngine(BASE_CONFIG, {
       ...DEFAULT_FEE_SCHEDULES,
       okx: undefined as never,
@@ -305,7 +319,8 @@ describe('RiskEngine', () => {
       emptyState(),
       1_500,
     );
-    expect(result.allowed).toBe(true);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('missing fee schedule'))).toBe(true);
   });
 
   it('applies edge-after-fees even when the two legs do not share a view', async () => {
@@ -365,7 +380,7 @@ describe('RiskEngine', () => {
 
   it('returns multiple reasons when several limits are breached', async () => {
     const engine = new RiskEngine(
-      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: 500 },
+      { ...BASE_CONFIG, RISK_MAX_NOTIONAL_PER_TRADE_USD: dec('500') },
       DEFAULT_FEE_SCHEDULES,
     );
     const state = stateWith({
@@ -382,6 +397,240 @@ describe('RiskEngine', () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.reasons.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('denies yes-no-parity buy-both intents with negative net edge after fees', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const result = await engine.check(
+      makeIntent(
+        [
+          leg('polymarket', 'buy', '0.495', '1000', { indexUsd: null }),
+          leg('polymarket', 'buy', '0.500', '1000', { indexUsd: null }),
+        ],
+        'yes-no-parity',
+      ),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('net edge after fees'))).toBe(true);
+  });
+
+  it('allows yes-no-parity buy-both intents with positive net edge after fees', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const result = await engine.check(
+      makeIntent(
+        [
+          leg('polymarket', 'buy', '0.40', '1000', { indexUsd: null }),
+          leg('polymarket', 'buy', '0.40', '1000', { indexUsd: null }),
+        ],
+        'yes-no-parity',
+      ),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows yes-no-parity sell-both intents with positive net edge after fees', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const result = await engine.check(
+      makeIntent(
+        [
+          leg('polymarket', 'sell', '0.60', '1000', { indexUsd: null }),
+          leg('polymarket', 'sell', '0.60', '1000', { indexUsd: null }),
+        ],
+        'yes-no-parity',
+      ),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('denies an intent with an unrecognised signal kind (fail-closed)', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const result = await engine.check(
+      makeIntent(
+        [leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')],
+        'mystery-signal',
+      ),
+      emptyState(),
+      1_500,
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.toLowerCase().includes('unknown signal kind'))).toBe(true);
+  });
+
+  it('denies an intent with only one leg', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const malformed = {
+      signalId: 'test:1',
+      signalKind: 'cross-venue',
+      legs: [leg('okx', 'buy', '1000', '1')],
+      tsMs: 1_000,
+    } as unknown as ExecutionIntent;
+    const result = await engine.check(malformed, emptyState(), 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('unsupported intent shape'))).toBe(true);
+  });
+
+  it('denies an intent with three or more legs', async () => {
+    const engine = new RiskEngine(BASE_CONFIG, DEFAULT_FEE_SCHEDULES);
+    const malformed = {
+      signalId: 'test:1',
+      signalKind: 'cross-venue',
+      legs: [
+        leg('okx', 'buy', '1000', '1'),
+        leg('deribit', 'sell', '1100', '1'),
+        leg('bybit', 'sell', '1100', '1'),
+      ],
+      tsMs: 1_000,
+    } as unknown as ExecutionIntent;
+    const result = await engine.check(malformed, emptyState(), 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('unsupported intent shape'))).toBe(true);
+  });
+});
+
+describe('RiskEngine greeks limits', () => {
+  const validIntent = () =>
+    makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]);
+
+  it('denies when |delta| is over the cap', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MAX_DELTA_PER_UNDERLYING: dec('5') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = {
+      ...emptyState(),
+      greeksPerUnderlying: [
+        { underlying: 'BTC', delta: dec('7'), vegaUsd: dec(0), gammaUsd: dec(0) },
+      ],
+    };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('|delta|'))).toBe(true);
+  });
+
+  it('denies when |vega| is over the cap', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MAX_VEGA_PER_UNDERLYING_USD: dec('1000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = {
+      ...emptyState(),
+      greeksPerUnderlying: [
+        { underlying: 'BTC', delta: dec(0), vegaUsd: dec('-1500'), gammaUsd: dec(0) },
+      ],
+    };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('|vega|'))).toBe(true);
+  });
+
+  it('denies when |gamma| is over the cap', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MAX_GAMMA_PER_UNDERLYING_USD: dec('2000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = {
+      ...emptyState(),
+      greeksPerUnderlying: [
+        { underlying: 'BTC', delta: dec(0), vegaUsd: dec(0), gammaUsd: dec('2500') },
+      ],
+    };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('|gamma|'))).toBe(true);
+  });
+
+  it('allows when greeks are inside the caps', async () => {
+    const engine = new RiskEngine(
+      {
+        ...BASE_CONFIG,
+        RISK_MAX_DELTA_PER_UNDERLYING: dec('5'),
+        RISK_MAX_VEGA_PER_UNDERLYING_USD: dec('1000'),
+        RISK_MAX_GAMMA_PER_UNDERLYING_USD: dec('2000'),
+      },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = {
+      ...emptyState(),
+      greeksPerUnderlying: [
+        { underlying: 'BTC', delta: dec('2'), vegaUsd: dec('500'), gammaUsd: dec('100') },
+      ],
+    };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('skips greeks checks when the state carries no greeks data', async () => {
+    const engine = new RiskEngine(
+      {
+        ...BASE_CONFIG,
+        RISK_MAX_DELTA_PER_UNDERLYING: dec('0.0001'),
+        RISK_MAX_VEGA_PER_UNDERLYING_USD: dec('0.0001'),
+        RISK_MAX_GAMMA_PER_UNDERLYING_USD: dec('0.0001'),
+      },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const result = await engine.check(validIntent(), emptyState(), 1_500);
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('RiskEngine margin and settlement limits', () => {
+  const validIntent = () =>
+    makeIntent([leg('okx', 'buy', '1000', '1'), leg('deribit', 'sell', '1100', '1')]);
+
+  it('denies when margin headroom is below the minimum', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MIN_MARGIN_HEADROOM_USD: dec('1000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = { ...emptyState(), marginHeadroomUsd: dec('250') };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('margin headroom'))).toBe(true);
+  });
+
+  it('allows when margin headroom covers the minimum', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MIN_MARGIN_HEADROOM_USD: dec('1000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = { ...emptyState(), marginHeadroomUsd: dec('5000') };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('denies when the new intent would breach the Polymarket settlement cap', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MAX_POLYMARKET_SETTLEMENT_USD: dec('1000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const intent = makeIntent(
+      [
+        leg('polymarket', 'buy', '0.40', '1000', { indexUsd: null }),
+        leg('polymarket', 'buy', '0.40', '1000', { indexUsd: null }),
+      ],
+      'yes-no-parity',
+    );
+    const state: RiskState = { ...emptyState(), polymarketSettlementExposureUsd: dec('300') };
+    const result = await engine.check(intent, state, 1_500);
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('settlement exposure'))).toBe(true);
+  });
+
+  it('ignores non-Polymarket legs for the settlement cap', async () => {
+    const engine = new RiskEngine(
+      { ...BASE_CONFIG, RISK_MAX_POLYMARKET_SETTLEMENT_USD: dec('1000') },
+      DEFAULT_FEE_SCHEDULES,
+    );
+    const state: RiskState = { ...emptyState(), polymarketSettlementExposureUsd: dec('900') };
+    const result = await engine.check(validIntent(), state, 1_500);
+    expect(result.allowed).toBe(true);
   });
 });
 
@@ -412,9 +661,10 @@ describe('riskStateFromSnapshot', () => {
       feesPaidUsd: dec('10'),
       netPnlUsd: dec('140'),
     };
-    const state = riskStateFromSnapshot(snapshot, dec('25'));
+    const state = riskStateFromSnapshot(snapshot, dec('25'), dec('115'));
     expect(state.grossNotionalUsd.toString()).toBe('1100');
     expect(state.dailyRealizedPnlUsd.toString()).toBe('25');
+    expect(state.dailyNetPnlUsd.toString()).toBe('115');
     expect(state.perVenue[0]!.notionalUsd.toString()).toBe('1100');
     expect(state.positions[0]!.qty.toString()).toBe('1');
   });

@@ -1,4 +1,4 @@
-import { dec, type Logger, type Venue } from '@optarb/core';
+import { dec, LiveClock, type Clock, type Logger, type Venue } from '@optarb/core';
 import type { InstrumentView } from '@optarb/marketdata';
 import type { AuditWriter, AuditFillInput } from '@optarb/persistence';
 import {
@@ -20,6 +20,10 @@ export interface LiveOrderSenderConfig {
   fees: FeeSchedules;
   audit: AuditWriter;
   logger?: Logger;
+  /** Clock for gateway-error reject timestamps (ADR-0004). Defaults to LiveClock. */
+  clock?: Clock;
+  /** Called on every gateway reject so the app can feed reject-spike tripwires. */
+  onReject?: (venue: Venue, tsMs: number) => void;
 }
 
 /**
@@ -35,10 +39,12 @@ export interface LiveOrderSenderConfig {
  */
 export class LiveOrderSender implements OrderCommandSender {
   private readonly config: LiveOrderSenderConfig;
+  private readonly clock: Clock;
   private readonly exchangeIds = new Map<string, string>(); // key: attemptId|legIndex
 
   constructor(config: LiveOrderSenderConfig) {
     this.config = config;
+    this.clock = config.clock ?? new LiveClock();
   }
 
   submit(attempt: OrderAttempt, legIndex: number, views: InstrumentView[], nowMs: number): void {
@@ -77,6 +83,9 @@ export class LiveOrderSender implements OrderCommandSender {
       if (event.kind === 'ack') {
         this.exchangeIds.set(this.routingKey(attempt.id, legIndex), event.exchangeOrderId);
       }
+      if (event.kind === 'reject') {
+        this.config.onReject?.(leg.venue, event.tsMs);
+      }
 
       const omsEvent = this.toOmsEvent(event);
       this.config.engine.onOrderEvent(attempt.id, legIndex, omsEvent, event.tsMs);
@@ -94,7 +103,7 @@ export class LiveOrderSender implements OrderCommandSender {
       });
       onEvent({
         kind: 'reject',
-        tsMs: Date.now(),
+        tsMs: this.clock.nowMs(),
         reason: `gateway error: ${String(err)}`,
       });
     });

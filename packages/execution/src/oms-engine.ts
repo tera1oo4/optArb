@@ -297,10 +297,8 @@ export class OmsEngine {
         if (!isTerminalLegStatus(leg.status)) leg.status = 'expired';
         break;
     }
-    if (isFillStatus(leg.status)) {
-      // Track first fill on the attempt for grace-period leg-risk detection.
-      // The attempt itself is looked up by the caller via recomputeStatus.
-    }
+    // First fills are tracked on the attempt itself (see recordFill) for
+    // grace-period leg-risk detection; nothing more to do here.
   }
 
   private historyEntry(event: OrderEvent): LegOrderHistoryEntry {

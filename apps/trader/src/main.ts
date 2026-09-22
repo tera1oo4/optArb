@@ -6,6 +6,7 @@ import {
   HealthRegistry,
   InMemoryEventBus,
   LiveClock,
+  LOG_REDACT_PATHS,
   nullCapture,
   type Decimal,
   type Logger,
@@ -17,7 +18,6 @@ import {
   PaperExecutor,
   resolveFeeSchedules,
   type ExecutionIntent,
-  type ExecutionOutcome,
   type PaperFill,
   type PortfolioSnapshot,
 } from '@optarb/execution';
@@ -29,7 +29,7 @@ import {
   type OrderGateway,
 } from '@optarb/live';
 import { MarketDataStore, type InstrumentView, type VenueQuote } from '@optarb/marketdata';
-import { RiskEngine, riskStateFromSnapshot } from '@optarb/risk';
+import { AutoKillSwitch, autoKillSwitchConfigFromRisk, RiskEngine } from '@optarb/risk';
 import {
   CrossVenueDetector,
   DigitalVsVanillaDetector,
@@ -48,10 +48,11 @@ import {
   type RedisPortfolioSnapshot,
 } from '@optarb/persistence';
 import { createDashboardHandler, pushSignal, type DashboardState } from './dashboard.js';
-import { createDailyRealizedPnlTracker } from './daily-pnl.js';
+import { createDailyRealizedPnlTracker, createDailyNetPnlTracker } from './daily-pnl.js';
 import { loadConfig } from './config.js';
 import { SignalTracker } from './signal-tracker.js';
 import { createRuntimeKillSwitch } from './runtime-kill-switch.js';
+import { processIntent, type SignalPipelineDeps } from './signal-pipeline.js';
 
 function toLogger(log: pino.Logger): Logger {
   return {
@@ -283,14 +284,6 @@ function yesNoParityIntent(
   };
 }
 
-function outcomeLabel(outcome: ExecutionOutcome): string {
-  if (outcome.status === 'executed') {
-    const r = outcome.result;
-    return `executed gross=${r.grossEdgeUsd.toFixed(2)} fees=${r.feesUsd.toFixed(2)} net=${r.netEdgeUsd.toFixed(2)}`;
-  }
-  return `skipped: ${outcome.reason}`;
-}
-
 function requestedNotionalUsd(intent: ExecutionIntent): Decimal {
   const buy = intent.legs[0].priceUsd.mul(intent.legs[0].sizeCoin);
   const sell = intent.legs[1].priceUsd.mul(intent.legs[1].sizeCoin);
@@ -464,7 +457,7 @@ async function persistPortfolioSnapshot(
  */
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const log = pino({ level: cfg.LOG_LEVEL });
+  const log = pino({ level: cfg.LOG_LEVEL, redact: LOG_REDACT_PATHS });
   const logger = toLogger(log);
   const deribitReal =
     cfg.LIVE_TRADING &&
@@ -538,11 +531,13 @@ async function main(): Promise<void> {
     rate: dec(cfg.DIGITAL_RATE),
     maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
   });
+  const fees = resolveFeeSchedules(feeOverrides(cfg));
   const yesNoDetector = new YesNoParityDetector({
     threshold: dec(cfg.YESNO_THRESHOLD),
     maxQuoteAgeMs: cfg.SIGNAL_MAX_QUOTE_AGE_MS,
+    feeSchedules: fees,
+    minSizeUsd: dec(cfg.YESNO_MIN_SIZE_USD),
   });
-  const fees = resolveFeeSchedules(feeOverrides(cfg));
   let executor: PaperExecutor;
   if (cfg.LIVE_TRADING) {
     if (!cfg.OMS_ENABLED) {
@@ -571,8 +566,9 @@ async function main(): Promise<void> {
             new DeribitOrderGateway({
               clientId: cfg.DERIBIT_API_KEY!,
               clientSecret: cfg.DERIBIT_API_SECRET!,
-              testnet: true,
+              testnet: cfg.DERIBIT_TESTNET,
               logger,
+              clock,
             }),
           ] as const;
         }
@@ -582,6 +578,7 @@ async function main(): Promise<void> {
             new PolymarketOrderGateway({
               privateKey: cfg.POLYMARKET_PRIVATE_KEY,
               logger,
+              clock,
             }),
           ] as const;
         }
@@ -595,6 +592,8 @@ async function main(): Promise<void> {
       fees,
       audit,
       logger,
+      clock,
+      onReject: (venue, tsMs) => autoKillSwitch.recordReject(venue, tsMs),
     });
     omsEngine.setCommandSender(liveSender);
   } else {
@@ -612,31 +611,48 @@ async function main(): Promise<void> {
       logger,
     });
   }
-  const riskEngine = new RiskEngine(
-    {
-      RISK_MAX_NOTIONAL_PER_TRADE_USD: cfg.RISK_MAX_NOTIONAL_PER_TRADE_USD,
-      RISK_MAX_NOTIONAL_PER_VENUE_USD: cfg.RISK_MAX_NOTIONAL_PER_VENUE_USD,
-      RISK_MAX_NOTIONAL_GLOBAL_USD: cfg.RISK_MAX_NOTIONAL_GLOBAL_USD,
-      RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: cfg.RISK_MAX_EXPOSURE_PER_UNDERLYING_USD,
-      RISK_MAX_DAILY_LOSS_USD: cfg.RISK_MAX_DAILY_LOSS_USD,
-      RISK_MAX_QUOTE_AGE_MS: cfg.RISK_MAX_QUOTE_AGE_MS,
-      RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
-      RISK_MAX_INDEX_DIVERGENCE_BPS: cfg.RISK_MAX_INDEX_DIVERGENCE_BPS,
-      RISK_MAX_LEG_SKEW_MS: cfg.RISK_MAX_LEG_SKEW_MS,
-      RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
-    },
-    fees,
-    () => runtimeKillSwitch.isActive(),
-  );
+  const riskCfg = {
+    RISK_MAX_NOTIONAL_PER_TRADE_USD: cfg.RISK_MAX_NOTIONAL_PER_TRADE_USD,
+    RISK_MAX_NOTIONAL_PER_VENUE_USD: cfg.RISK_MAX_NOTIONAL_PER_VENUE_USD,
+    RISK_MAX_NOTIONAL_GLOBAL_USD: cfg.RISK_MAX_NOTIONAL_GLOBAL_USD,
+    RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: cfg.RISK_MAX_EXPOSURE_PER_UNDERLYING_USD,
+    RISK_MAX_DAILY_LOSS_USD: cfg.RISK_MAX_DAILY_LOSS_USD,
+    RISK_MAX_DAILY_DRAWDOWN_USD: cfg.RISK_MAX_DAILY_DRAWDOWN_USD,
+    RISK_MAX_QUOTE_AGE_MS: cfg.RISK_MAX_QUOTE_AGE_MS,
+    RISK_MIN_EDGE_AFTER_FEES_BPS: cfg.RISK_MIN_EDGE_AFTER_FEES_BPS,
+    RISK_MAX_INDEX_DIVERGENCE_BPS: cfg.RISK_MAX_INDEX_DIVERGENCE_BPS,
+    RISK_MAX_LEG_SKEW_MS: cfg.RISK_MAX_LEG_SKEW_MS,
+    RISK_KILL_SWITCH: cfg.RISK_KILL_SWITCH,
+    RISK_MAX_DELTA_PER_UNDERLYING: cfg.RISK_MAX_DELTA_PER_UNDERLYING,
+    RISK_MAX_VEGA_PER_UNDERLYING_USD: cfg.RISK_MAX_VEGA_PER_UNDERLYING_USD,
+    RISK_MAX_GAMMA_PER_UNDERLYING_USD: cfg.RISK_MAX_GAMMA_PER_UNDERLYING_USD,
+    RISK_MIN_MARGIN_HEADROOM_USD: cfg.RISK_MIN_MARGIN_HEADROOM_USD,
+    RISK_MAX_POLYMARKET_SETTLEMENT_USD: cfg.RISK_MAX_POLYMARKET_SETTLEMENT_USD,
+    RISK_AUTO_KILL_HEARTBEAT_IDLE_MS: cfg.RISK_AUTO_KILL_HEARTBEAT_IDLE_MS,
+    RISK_AUTO_KILL_SEQUENCE_GAPS: cfg.RISK_AUTO_KILL_SEQUENCE_GAPS,
+    RISK_AUTO_KILL_SEQUENCE_WINDOW_MS: cfg.RISK_AUTO_KILL_SEQUENCE_WINDOW_MS,
+    RISK_AUTO_KILL_REJECT_COUNT: cfg.RISK_AUTO_KILL_REJECT_COUNT,
+    RISK_AUTO_KILL_REJECT_WINDOW_MS: cfg.RISK_AUTO_KILL_REJECT_WINDOW_MS,
+  };
+  const riskEngine = new RiskEngine(riskCfg, fees, () => runtimeKillSwitch.isActive());
+  // Latching auto tripwires: heartbeat loss, sequence-gap bursts, reject
+  // spikes (ADR-0007). Once tripped it stays active until an operator reset.
+  const autoKillSwitch = new AutoKillSwitch(autoKillSwitchConfigFromRisk(riskCfg), clock, logger);
   const tracker = new SignalTracker(cfg.PAPER_SIGNAL_HORIZONS_MS);
 
   bus.on('market.ticker', (t) => {
     store.applyTicker(t);
     dashboardState.lastMessageTs.set(t.venue, t.recvMs);
+    autoKillSwitch.recordMessage(t.venue, t.recvMs);
   });
   bus.on('market.book', (b) => {
     store.applyBook(b);
     dashboardState.lastMessageTs.set(b.venue, b.recvMs);
+    autoKillSwitch.recordMessage(b.venue, b.recvMs);
+  });
+  bus.on('venue.sequence-gap', (g) => {
+    logger.warn('book sequence gap', { venue: g.venue, instrument: g.instrument });
+    autoKillSwitch.recordSequenceGap(g.venue, g.tsMs);
   });
   bus.on('connector.status', (s) => {
     dashboardState.statuses.set(s.venue, s);
@@ -689,7 +705,7 @@ async function main(): Promise<void> {
     );
   }
   healthRegistry.register('kill-switch', async () => {
-    const active = await runtimeKillSwitch.isActive();
+    const active = (await runtimeKillSwitch.isActive()) || autoKillSwitch.isActive();
     return active ? { healthy: false, message: 'active' } : { healthy: true };
   });
   healthRegistry.register(
@@ -716,6 +732,7 @@ async function main(): Promise<void> {
         dashboardState,
         async () => healthRegistry.evaluate(),
         logger,
+        clock,
       );
       healthServer = await createHealthServer(healthRegistry, {
         port: cfg.HEALTH_PORT,
@@ -743,8 +760,26 @@ async function main(): Promise<void> {
   const dailyRealizedPnl = createDailyRealizedPnlTracker(
     executor.portfolio.snapshot(store.views()).realizedPnlUsd,
   );
+  const dailyNetPnl = createDailyNetPnlTracker(
+    executor.portfolio.snapshot(store.views()).netPnlUsd,
+  );
   let scanInProgress = false;
   let scanTimer: NodeJS.Timeout | null = null;
+  let autoTripped = false;
+  const pipelineDeps = (): SignalPipelineDeps => ({
+    riskEngine,
+    executor,
+    audit,
+    store,
+    dailyRealizedPnl,
+    dailyNetPnl,
+    logger,
+    logExecution: (signalId, outcome, fills) =>
+      log.info({ signalId, outcome, fills }, 'paper execution'),
+    logFill: (fill) => logFill(log, fill),
+    persistExecution: (intent, fills) =>
+      persistExecution(audit, executor, intent, fills, store.views()),
+  });
   const scheduleScan = () => {
     scanTimer = setTimeout(() => void runScan(), cfg.SCAN_INTERVAL_MS);
   };
@@ -767,6 +802,17 @@ async function main(): Promise<void> {
 
       // Read the kill switch once per scan instead of once per intent.
       const killSwitchActive = await runtimeKillSwitch.isActive();
+      // Time-based auto tripwires (heartbeat loss). Event tripwires latch
+      // immediately in their record* methods. A fresh trip is persisted to
+      // Redis so restarts stay halted until an operator reset.
+      const autoEval = autoKillSwitch.evaluate(nowMs);
+      const autoActive = autoEval.active;
+      if (autoActive && !autoTripped) {
+        autoTripped = true;
+        logger.error('auto kill-switch tripped; halting trading', { reasons: autoEval.reasons });
+        void redisStore.setKillSwitch(true).catch(() => {});
+      }
+      const halted = killSwitchActive || autoActive;
 
       const signals = detector.detect(views, nowMs);
       tracker.update(views, nowMs).forEach((o) =>
@@ -807,49 +853,13 @@ async function main(): Promise<void> {
         const intent = crossVenueIntent(s, view);
         if (!intent) continue;
 
-        const snapshot = executor.portfolio.snapshot(store.views());
-        const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
-        const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
-        const riskResult = await riskEngine.check(intent, riskState, nowMs, killSwitchActive);
-        if (!riskResult.allowed) {
+        const res = await processIntent(pipelineDeps(), intent, nowMs, halted);
+        if (res.riskDenied) {
           riskRejectCount += 1;
           reportRiskRejectCount += 1;
-          log.warn(
-            {
-              signalId: intent.signalId,
-              reasons: riskResult.reasons,
-            },
-            'risk check denied intent',
-          );
-          void audit
-            .writeRiskDecision({
-              signalId: intent.signalId,
-              allowed: false,
-              reasons: riskResult.reasons,
-              checkedAt: new Date(nowMs),
-            })
-            .catch(() => {});
-          continue;
-        }
-
-        const outcome = executor.execute(intent);
-        if (outcome.status === 'executed') {
+        } else if (res.executed) {
           executedCount += 1;
-          reportFillCount += outcome.result.fills.length;
-        }
-        log.info(
-          {
-            signalId: intent.signalId,
-            outcome: outcomeLabel(outcome),
-            fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
-          },
-          'paper execution',
-        );
-        if (outcome.status === 'executed') {
-          for (const fill of outcome.result.fills) logFill(log, fill);
-          void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
-            () => {},
-          );
+          reportFillCount += res.fillCount;
         }
       }
 
@@ -895,46 +905,13 @@ async function main(): Promise<void> {
 
         const intent = yesNoParityIntent(s, store);
         if (!intent) continue;
-        const snapshot = executor.portfolio.snapshot(store.views());
-        const dailyRealizedPnlUsd = dailyRealizedPnl(nowMs, snapshot.realizedPnlUsd);
-        const riskState = riskStateFromSnapshot(snapshot, dailyRealizedPnlUsd);
-        const riskResult = await riskEngine.check(intent, riskState, nowMs, killSwitchActive);
-        if (!riskResult.allowed) {
+        const res = await processIntent(pipelineDeps(), intent, nowMs, halted);
+        if (res.riskDenied) {
           riskRejectCount += 1;
           reportRiskRejectCount += 1;
-          log.warn(
-            { signalId: intent.signalId, reasons: riskResult.reasons },
-            'risk check denied intent',
-          );
-          void audit
-            .writeRiskDecision({
-              signalId: intent.signalId,
-              allowed: false,
-              reasons: riskResult.reasons,
-              checkedAt: new Date(nowMs),
-            })
-            .catch(() => {});
-          continue;
-        }
-
-        const outcome = executor.execute(intent);
-        if (outcome.status === 'executed') {
+        } else if (res.executed) {
           executedCount += 1;
-          reportFillCount += outcome.result.fills.length;
-        }
-        log.info(
-          {
-            signalId: intent.signalId,
-            outcome: outcomeLabel(outcome),
-            fills: outcome.status === 'executed' ? outcome.result.fills.length : 0,
-          },
-          'paper execution',
-        );
-        if (outcome.status === 'executed') {
-          for (const fill of outcome.result.fills) logFill(log, fill);
-          void persistExecution(audit, executor, intent, outcome.result.fills, store.views()).catch(
-            () => {},
-          );
+          reportFillCount += res.fillCount;
         }
       }
 

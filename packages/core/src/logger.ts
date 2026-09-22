@@ -15,3 +15,41 @@ export const noopLogger: Logger = {
   warn: () => {},
   error: () => {},
 };
+
+/**
+ * pino `redact` paths applied by every app entrypoint (ADR-0006).
+ * Any log field matching these key names is replaced with `[Redacted]`
+ * before it reaches the output, so API secrets can never leak via logs
+ * even if a future contributor logs a whole request object.
+ */
+export const LOG_REDACT_PATHS: string[] = [
+  '*.secret',
+  '*.clientSecret',
+  '*.client_secret',
+  '*.apiSecret',
+  '*.api_secret',
+  '*.apiKey',
+  '*.api_key',
+  '*.privateKey',
+  '*.private_key',
+  '*.passphrase',
+  '*.signature',
+  '*.accessToken',
+  '*.access_token',
+  '*.refreshToken',
+  '*.refresh_token',
+  'secret',
+  'clientSecret',
+  'apiSecret',
+  'apiKey',
+  'privateKey',
+  'passphrase',
+  'signature',
+  'accessToken',
+  'DERIBIT_API_SECRET',
+  'BYBIT_API_SECRET',
+  'OKX_API_SECRET',
+  'OKX_PASSPHRASE',
+  'BINANCE_API_SECRET',
+  'POLYMARKET_PRIVATE_KEY',
+];

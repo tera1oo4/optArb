@@ -16,6 +16,9 @@ logs/
 data/capture/
 data/*.jsonl
 data/*.jsonl.gz
+# Per-app capture/data dirs (collector writes apps/collector/data/)
+apps/**/data/
+**/data/capture/
 
 # kimi-code: локальный конфиг проекта (машинно-специфичный)
 .kimi-code/local.toml

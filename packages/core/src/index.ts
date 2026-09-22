@@ -3,7 +3,7 @@ export type { DecimalInput } from './decimal.js';
 export type { Clock } from './clock.js';
 export { LiveClock, VirtualClock } from './clock.js';
 export type { Logger } from './logger.js';
-export { noopLogger } from './logger.js';
+export { LOG_REDACT_PATHS, noopLogger } from './logger.js';
 export type {
   BookUpdate,
   ConnectorState,

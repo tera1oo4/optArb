@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Logger, Venue, ConnectorStatus } from '@optarb/core';
+import type { Clock, Logger, Venue, ConnectorStatus } from '@optarb/core';
 
 export interface RecentSignal {
   tsMs: number;
@@ -57,6 +57,7 @@ export function createDashboardHandler(
   state: DashboardState,
   evaluateHealth: () => Promise<{ status: string; checks: Record<string, unknown> }>,
   logger?: Logger,
+  clock?: Clock,
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const url = req.url ?? '/';
@@ -97,10 +98,11 @@ export function createDashboardHandler(
 
     if (url === '/api/status') {
       const health = await evaluateHealth();
+      const nowMs = clock?.nowMs() ?? Date.now();
       const lastMessageAges: Record<string, string> = {};
       for (const venue of state.venues) {
         const ts = state.lastMessageTs.get(venue);
-        lastMessageAges[venue] = ts ? `${Date.now() - ts}ms ago` : 'never';
+        lastMessageAges[venue] = ts ? `${nowMs - ts}ms ago` : 'never';
       }
       sendJson(res, 200, {
         status: health.status,

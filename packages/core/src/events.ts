@@ -1,5 +1,13 @@
 import { EventEmitter } from 'node:events';
-import type { BookUpdate, ConnectorStatus, TickerUpdate, TradeUpdate } from './model.js';
+import type { BookUpdate, ConnectorStatus, TickerUpdate, TradeUpdate, Venue } from './model.js';
+
+/** Emitted when a venue connector detects an order-book sequence gap and resyncs. */
+export interface SequenceGapEvent {
+  venue: Venue;
+  instrument: string;
+  tsMs: number;
+  detail?: string;
+}
 
 /** Typed event map of the whole system (ADR-0004). */
 export interface AppEventMap {
@@ -7,6 +15,7 @@ export interface AppEventMap {
   'market.trade': TradeUpdate;
   'market.ticker': TickerUpdate;
   'connector.status': ConnectorStatus;
+  'venue.sequence-gap': SequenceGapEvent;
 }
 
 export type AppEventType = keyof AppEventMap;

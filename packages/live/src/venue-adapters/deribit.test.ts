@@ -189,7 +189,8 @@ describe('DeribitOrderGateway', () => {
     globalThis.fetch = fetchMock;
 
     const gw = new DeribitOrderGateway({ clientId: 'id', clientSecret: 'secret' });
-    // rawContracts = 0.47 / 0.1 = 4.7 → floor to 0.1 step → 4.6 contracts.
+    // rawContracts = 0.47 / 0.1 = 4.7, already a multiple of the 0.1 step →
+    // floorToStep leaves it at 4.7 contracts.
     await gw.submit(
       makeReq({
         sizeCoin: dec('0.47'),
@@ -203,7 +204,46 @@ describe('DeribitOrderGateway', () => {
       String(c[0]).includes('private/place_order'),
     )!;
     const body = JSON.parse((placeCall[1] as { body: string }).body);
-    expect(body.params.amount).toBe(4.6);
+    expect(body.params.amount).toBe(4.7);
+  });
+
+  it('floors down when rawContracts is not an exact multiple of the step', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          jsonrpc: '2.0',
+          id: 1,
+          result: { access_token: 'tok', refresh_token: 'ref', expires_in: 3600 },
+        }),
+      })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          jsonrpc: '2.0',
+          id: 2,
+          result: { order: { order_id: 'o1', order_state: 'open', filled_amount: 0 } },
+        }),
+      });
+    globalThis.fetch = fetchMock;
+
+    const gw = new DeribitOrderGateway({ clientId: 'id', clientSecret: 'secret' });
+    // rawContracts = 0.473 / 0.1 = 4.73 → floor to the 0.1 step → 4.7 contracts.
+    await gw.submit(
+      makeReq({
+        sizeCoin: dec('0.473'),
+        contractMultiplier: dec('0.1'),
+        metadata: { minTradeAmount: '0.1', tickSize: '0.0005' },
+      }),
+      () => {},
+    );
+
+    const placeCall = fetchMock.mock.calls.find((c) =>
+      String(c[0]).includes('private/place_order'),
+    )!;
+    const body = JSON.parse((placeCall[1] as { body: string }).body);
+    expect(body.params.amount).toBe(4.7);
   });
 
   it('rejects an order below the min trade amount', async () => {

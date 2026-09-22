@@ -21,6 +21,7 @@ export default defineConfig({
       '@optarb/backtest-engine': r('./packages/backtest-engine/src/index.ts'),
       '@optarb/analytics': r('./packages/analytics/src/index.ts'),
       '@optarb/venues': r('./packages/venues/all/src/index.ts'),
+      '@optarb/live': r('./packages/live/src/index.ts'),
     },
   },
   test: {
@@ -28,5 +29,12 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'],
     environment: 'node',
     testTimeout: 20_000,
+    coverage: {
+      provider: 'v8',
+      reportsDirectory: './coverage',
+      reporter: ['text', 'lcov'],
+      include: ['packages/*/src/**/*.ts', 'apps/*/src/**/*.ts'],
+      exclude: ['**/*.test.ts', '**/index.ts'],
+    },
   },
 });

@@ -1,4 +1,4 @@
-import type { Logger, Venue } from '@optarb/core';
+import { LiveClock, type Clock, type Logger, type Venue } from '@optarb/core';
 import type { GatewayOrderEvent, OrderGateway, OrderRequest } from '../order-gateway.js';
 
 /**
@@ -9,10 +9,12 @@ import type { GatewayOrderEvent, OrderGateway, OrderRequest } from '../order-gat
 export class StubOrderGateway implements OrderGateway {
   readonly venue: Venue;
   private readonly logger?: Logger;
+  private readonly clock: Clock;
 
-  constructor(venue: Venue, logger?: Logger) {
+  constructor(venue: Venue, logger?: Logger, clock?: Clock) {
     this.venue = venue;
     this.logger = logger;
+    this.clock = clock ?? new LiveClock();
   }
 
   async submit(req: OrderRequest, onEvent: (event: GatewayOrderEvent) => void): Promise<void> {
@@ -29,7 +31,7 @@ export class StubOrderGateway implements OrderGateway {
 
     onEvent({
       kind: 'reject',
-      tsMs: Date.now(),
+      tsMs: this.clock.nowMs(),
       reason: `live trading not configured for ${this.venue}`,
     });
   }

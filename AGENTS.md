@@ -12,7 +12,7 @@
 
 - Node.js 22 LTS, TypeScript 5 (`strict`), ESM
 - pnpm workspaces — модульный монолит
-- vitest, eslint + prettier, zod, pino, ws
+- vitest, prettier, zod, pino, ws (eslint отсутствует — границы пакетов держатся на ревью; см. ADR-0002)
 - **decimal.js / fixed-point bigint для всех цен и количеств — `number`-float в финансовых расчётах запрещён**
 - Время: epoch ms UTC; `Date.now()` только через интерфейс `Clock` (ADR-0004)
 
@@ -30,7 +30,9 @@ packages/marketdata       — USD-нормализация (coin-quoted × index
 packages/signals          — cross-venue детектор + digital-vs-vanilla + YES/NO-parity (freshness + spread bps + executable size)
 packages/execution        — paper-only execution: OMS two-legged state machine + leg-risk control (M9),
                             fee-aware virtual fills, positions, PnL (NO order APIs)
-packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch (env fallback + runtime callback)
+packages/risk             — pre-trade risk engine: limits, quote freshness, edge-after-fees, kill switch (env fallback + runtime callback),
+                            greeks/margin/settlement caps (optional, ADR-0007), latching AutoKillSwitch (heartbeat/sequence-gap/reject-spike)
+packages/live             — live order gateways: Deribit (testnet/prod) + Polymarket CLOB adapters, stub fallback, LiveOrderSender (M12; Clock-инжектирован)
 packages/venues/all       — meta-пакет: фабрика createVenueConnector для apps
 packages/pricing          — Black-76 (call/put), normalCdf, digital call/put = DF·N(±d2); decimal.js only
 packages/backtest-engine  — deterministic replay: marketdata → signals → risk → paper execution → PnL report
@@ -38,7 +40,7 @@ packages/analytics        — performance analytics: hit-rate, PnL curves, per-d
 apps/collector            — live-сбор рыночных данных + capture (multi-venue, VENUES=...)
 apps/backtest             — thin CLI over packages/backtest-engine (multi-venue replay)
 apps/analytics            — CLI for Postgres-backed performance reports
-apps/trader               — paper-режим: consolidated view + cross-venue сигналы + Polymarket digital/parity detectors (ордеров НЕТ)
+apps/trader               — paper-режим по умолчанию + gated live (LIVE_TRADING + confirm, M12): consolidated view + cross-venue сигналы + Polymarket digital/parity detectors
 ```
 
 ## Команды
@@ -111,6 +113,9 @@ pnpm --filter @optarb/persistence migrate  # apply Postgres migrations (needs PE
 ## Roadmap
 
 14. ✅ Production readiness: CI/CD, rotating capture, health endpoint, Docker image
+15. ✅ Risk catch-up (ADR-0007): AutoKillSwitch, greeks/margin/settlement caps, audit всех risk-решений, Clock в live-пакете, pino redaction
+16. ⬜ Greeks/margin wiring: проброс греков и маржи из портфеля/веню в RiskState (сейчас caps пропускаются без данных)
+17. ⬜ Per-venue kill switch; cancel-all при срабатывании авто-килла
 
 ## Чек-лист перед завершением задачи
 

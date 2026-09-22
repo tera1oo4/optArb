@@ -10,8 +10,13 @@ import {
   type TickSize,
 } from '@polymarket/clob-client-v2';
 
-import { dec, type Logger, type Venue } from '@optarb/core';
-import type { GatewayOrderEvent, OrderGateway, OrderRequest, TimeInForce } from '../order-gateway.js';
+import { dec, LiveClock, type Clock, type Logger, type Venue } from '@optarb/core';
+import type {
+  GatewayOrderEvent,
+  OrderGateway,
+  OrderRequest,
+  TimeInForce,
+} from '../order-gateway.js';
 
 export interface PolymarketGatewayConfig {
   /** Hex private key with or without 0x prefix. Controls real USDC funds. */
@@ -21,6 +26,8 @@ export interface PolymarketGatewayConfig {
   /** Chain id; defaults to Polygon mainnet (137). */
   chainId?: number;
   logger?: Logger;
+  /** Clock for event timestamps (ADR-0004). Defaults to LiveClock. */
+  clock?: Clock;
 }
 
 const DEFAULT_HOST = 'https://clob.polymarket.com';
@@ -42,6 +49,7 @@ export class PolymarketOrderGateway implements OrderGateway {
   readonly venue: Venue = 'polymarket';
 
   private readonly config: PolymarketGatewayConfig;
+  private readonly clock: Clock;
   private client: ClobClient | null = null;
   private clientPromise: Promise<ClobClient> | null = null;
   private readonly pollTimers = new Map<string, NodeJS.Timeout>();
@@ -49,6 +57,7 @@ export class PolymarketOrderGateway implements OrderGateway {
 
   constructor(config: PolymarketGatewayConfig) {
     this.config = config;
+    this.clock = config.clock ?? new LiveClock();
   }
 
   async submit(req: OrderRequest, onEvent: (event: GatewayOrderEvent) => void): Promise<void> {
@@ -80,7 +89,7 @@ export class PolymarketOrderGateway implements OrderGateway {
       }
 
       const orderId = response.orderID;
-      onEvent({ kind: 'ack', tsMs: Date.now(), exchangeOrderId: orderId });
+      onEvent({ kind: 'ack', tsMs: this.clock.nowMs(), exchangeOrderId: orderId });
       this.startPolling(orderId, req, onEvent);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -88,7 +97,7 @@ export class PolymarketOrderGateway implements OrderGateway {
         instrumentId: req.instrumentId,
         err: message,
       });
-      onEvent({ kind: 'reject', tsMs: Date.now(), reason: message });
+      onEvent({ kind: 'reject', tsMs: this.clock.nowMs(), reason: message });
     }
   }
 
@@ -160,15 +169,19 @@ export class PolymarketOrderGateway implements OrderGateway {
       const sizeCoin = dec(delta);
 
       if (order.status === 'FILLED') {
-        onEvent({ kind: 'fill', tsMs: Date.now(), priceUsd, sizeCoin });
+        onEvent({ kind: 'fill', tsMs: this.clock.nowMs(), priceUsd, sizeCoin });
       } else {
-        onEvent({ kind: 'partial_fill', tsMs: Date.now(), priceUsd, sizeCoin });
+        onEvent({ kind: 'partial_fill', tsMs: this.clock.nowMs(), priceUsd, sizeCoin });
       }
       this.reportedFilled.set(orderId, matched);
     }
 
     if (order.status === 'CANCELLED') {
-      onEvent({ kind: 'cancel', tsMs: Date.now(), reason: 'cancelled by exchange or client' });
+      onEvent({
+        kind: 'cancel',
+        tsMs: this.clock.nowMs(),
+        reason: 'cancelled by exchange or client',
+      });
     }
   }
 
@@ -219,11 +232,13 @@ function tokenIdFromInstrumentId(instrumentId: string): string {
  * no order ever rests on the book and strands the other leg. `gtc` is only for
  * deliberate resting orders. FOK maps to FAK when the SDK lacks a FOK type.
  */
-function polymarketOrderType(tif: TimeInForce | undefined): OrderType {
-  const types = OrderType as unknown as Record<string, OrderType>;
-  if (tif === 'gtc') return OrderType.GTC;
-  // Prefer FAK (IOC); fall back to GTC only if the SDK build lacks it.
-  return types.FAK ?? types.FOK ?? OrderType.GTC;
+// createAndPostOrder only accepts OrderType.GTC | OrderType.GTD (per SDK
+// typings); FAK/FOK are only valid for createAndPostMarketOrder, which this
+// gateway does not use. GTD would additionally require an expiration
+// timestamp, so GTC is the only supported resting-order type here regardless
+// of the requested time-in-force.
+function polymarketOrderType(_tif: TimeInForce | undefined): OrderType.GTC | OrderType.GTD {
+  return OrderType.GTC;
 }
 
 function normalizePrivateKey(key: string): string {

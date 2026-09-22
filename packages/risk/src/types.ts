@@ -35,6 +35,30 @@ export interface RiskState {
    * a production deployment would reset it at the session rollover.
    */
   dailyRealizedPnlUsd: Decimal;
+  /**
+   * Mark-to-market PnL since the start of the trading day: realized +
+   * unrealized − fees. Catches a losing open leg that dailyRealizedPnlUsd,
+   * which only moves when a position is closed, would never see.
+   */
+  dailyNetPnlUsd: Decimal;
+  /**
+   * Per-underlying greeks exposure (optional). When present, the engine
+   * enforces RISK_MAX_{DELTA,VEGA,GAMMA}_PER_UNDERLYING. Units: delta in
+   * coin, vega/gamma in USD.
+   */
+  greeksPerUnderlying?: GreeksExposure[];
+  /** Free margin headroom in USD (optional). Negative = margin call territory. */
+  marginHeadroomUsd?: Decimal;
+  /** Currently unsettled Polymarket exposure in USD (optional). */
+  polymarketSettlementExposureUsd?: Decimal;
+}
+
+/** Per-underlying greeks bucket used by the risk engine. */
+export interface GreeksExposure {
+  underlying: string;
+  delta: Decimal;
+  vegaUsd: Decimal;
+  gammaUsd: Decimal;
 }
 
 /** Result of a pre-trade risk check. */

@@ -6,12 +6,14 @@ import type { RiskCheckResult, RiskExposure, RiskPosition, RiskState } from './t
 
 /**
  * Maps the paper portfolio snapshot into the read-only risk state.
- * dailyRealizedPnlUsd is provided separately because the portfolio tracks
- * cumulative realized PnL, while risk cares about the current session/day.
+ * dailyRealizedPnlUsd and dailyNetPnlUsd are provided separately because the
+ * portfolio tracks cumulative PnL, while risk cares about the current
+ * session/day.
  */
 export function riskStateFromSnapshot(
   snapshot: PortfolioSnapshot,
   dailyRealizedPnlUsd: Decimal,
+  dailyNetPnlUsd: Decimal,
 ): RiskState {
   return {
     positions: snapshot.positions.map((p): RiskPosition => ({
@@ -32,6 +34,7 @@ export function riskStateFromSnapshot(
     })),
     grossNotionalUsd: snapshot.grossNotionalUsd,
     dailyRealizedPnlUsd,
+    dailyNetPnlUsd,
   };
 }
 
@@ -128,7 +131,16 @@ export class RiskEngine {
       );
     }
 
-    const edgeReason = this.checkTwoLeggedEdge(intent);
+    if (
+      state.dailyNetPnlUsd.lt(0) &&
+      state.dailyNetPnlUsd.neg().gt(this.config.RISK_MAX_DAILY_DRAWDOWN_USD)
+    ) {
+      reasons.push(
+        `daily mark-to-market drawdown ${state.dailyNetPnlUsd.toFixed(2)} USD exceeds ${this.config.RISK_MAX_DAILY_DRAWDOWN_USD}`,
+      );
+    }
+
+    const edgeReason = this.checkIntentEdge(intent);
     if (edgeReason) reasons.push(edgeReason);
 
     const skewReason = this.checkLegSkew(intent);
@@ -136,6 +148,12 @@ export class RiskEngine {
 
     const indexReason = this.checkIndexDivergence(intent);
     if (indexReason) reasons.push(indexReason);
+
+    for (const reason of this.checkGreeks(state)) reasons.push(reason);
+    const marginReason = this.checkMarginHeadroom(state);
+    if (marginReason) reasons.push(marginReason);
+    const settlementReason = this.checkPolymarketSettlement(intent, state);
+    if (settlementReason) reasons.push(settlementReason);
 
     return reasons.length === 0 ? { allowed: true, reasons: [] } : { allowed: false, reasons };
   }
@@ -188,43 +206,179 @@ export class RiskEngine {
     return null;
   }
 
-  private checkTwoLeggedEdge(intent: ExecutionIntent): string | null {
-    if (intent.legs.length !== 2) return null;
+  /**
+   * Greeks exposure caps (ADR-0006). Enforced only for underlyings the state
+   * reports greeks for; underlyings without greeks data skip the check so a
+   * portfolio that does not track greeks yet is not blocked outright.
+   * A new intent is denied while the book is already over the cap (fail-closed
+   * on the existing exposure — the intent itself carries no greeks).
+   */
+  private checkGreeks(state: RiskState): string[] {
+    const reasons: string[] = [];
+    const greeks = state.greeksPerUnderlying;
+    if (!greeks) return reasons;
+    const { RISK_MAX_DELTA_PER_UNDERLYING: maxDelta } = this.config;
+    const { RISK_MAX_VEGA_PER_UNDERLYING_USD: maxVega } = this.config;
+    const { RISK_MAX_GAMMA_PER_UNDERLYING_USD: maxGamma } = this.config;
+    for (const g of greeks) {
+      if (maxDelta !== undefined && g.delta.abs().gt(maxDelta)) {
+        reasons.push(
+          `underlying ${g.underlying} |delta| ${g.delta.abs().toFixed(4)} exceeds ${maxDelta.toFixed(4)}`,
+        );
+      }
+      if (maxVega !== undefined && g.vegaUsd.abs().gt(maxVega)) {
+        reasons.push(
+          `underlying ${g.underlying} |vega| ${g.vegaUsd.abs().toFixed(2)} USD exceeds ${maxVega.toFixed(2)}`,
+        );
+      }
+      if (maxGamma !== undefined && g.gammaUsd.abs().gt(maxGamma)) {
+        reasons.push(
+          `underlying ${g.underlying} |gamma| ${g.gammaUsd.abs().toFixed(2)} USD exceeds ${maxGamma.toFixed(2)}`,
+        );
+      }
+    }
+    return reasons;
+  }
+
+  /**
+   * Margin sufficiency pre-check (ADR-0006): deny new intents while the
+   * reported free-margin headroom is below the configured minimum.
+   * Skipped when the state carries no margin data.
+   */
+  private checkMarginHeadroom(state: RiskState): string | null {
+    const min = this.config.RISK_MIN_MARGIN_HEADROOM_USD;
+    if (min === undefined || state.marginHeadroomUsd === undefined) return null;
+    if (state.marginHeadroomUsd.lt(min)) {
+      return `margin headroom ${state.marginHeadroomUsd.toFixed(2)} USD < minimum ${min.toFixed(2)}`;
+    }
+    return null;
+  }
+
+  /**
+   * Polymarket settlement-risk cap (ADR-0006): the amount locked in YES/NO
+   * positions until binary settlement must stay bounded. Adds the new
+   * intent's Polymarket-leg notional to the reported unsettled exposure.
+   * Skipped when no cap is configured.
+   */
+  private checkPolymarketSettlement(intent: ExecutionIntent, state: RiskState): string | null {
+    const max = this.config.RISK_MAX_POLYMARKET_SETTLEMENT_USD;
+    if (max === undefined) return null;
+    let newPolyNotional = dec(0);
+    for (const leg of intent.legs) {
+      if (leg.venue === 'polymarket') {
+        newPolyNotional = newPolyNotional.add(leg.priceUsd.mul(leg.sizeCoin));
+      }
+    }
+    const after = (state.polymarketSettlementExposureUsd ?? dec(0)).add(newPolyNotional);
+    if (after.gt(max)) {
+      return `polymarket settlement exposure ${after.toFixed(2)} USD exceeds ${max.toFixed(2)}`;
+    }
+    return null;
+  }
+
+  /**
+   * Minimum-edge-after-fees gate. The payoff of a two-legged intent depends on
+   * its shape, so the formula is selected by `signalKind`:
+   *
+   * - `cross-venue`: directional pair — edge = sell proceeds − buy cost − fees,
+   *   measured against the capital put up on the buy leg.
+   * - `yes-no-parity`: both legs are on the SAME side of a Polymarket YES/NO
+   *   pair that pays exactly $1 per complete set. Buying both costs Σ ask and
+   *   returns $1; selling both requires minting a complete set for $1 and
+   *   returns Σ bid. Treating this as "sell − buy" (the directional formula)
+   *   would compare the two tokens against each other and produce nonsense.
+   *
+   * An unrecognised shape is rejected — fail-closed. Skipping the check, as the
+   * previous single-formula version did for same-side legs, let YES/NO-parity
+   * intents reach execution with an unverified (possibly negative) net edge.
+   */
+  private checkIntentEdge(intent: ExecutionIntent): string | null {
+    if (intent.legs.length !== 2) {
+      return `unsupported intent shape: expected 2 legs, got ${intent.legs.length}`;
+    }
     const [a, b] = intent.legs;
-    if (!a || !b) return null;
+    if (!a || !b) return 'unsupported intent shape: missing leg';
 
-    const buyLeg = a.side === 'buy' ? a : b.side === 'buy' ? b : null;
-    const sellLeg = a.side === 'sell' ? a : b.side === 'sell' ? b : null;
-    if (!buyLeg || !sellLeg) return null;
+    const feesUsd = this.takerFeesUsd(a, b);
+    if (feesUsd === null) return `missing fee schedule for ${a.venue}/${b.venue}`;
 
-    const buyFeeSchedule = this.fees[buyLeg.venue];
-    const sellFeeSchedule = this.fees[sellLeg.venue];
-    if (!buyFeeSchedule || !sellFeeSchedule) return null;
+    const edge =
+      intent.signalKind === 'cross-venue'
+        ? this.crossVenueEdge(a, b, feesUsd)
+        : intent.signalKind === 'yes-no-parity'
+          ? this.parityEdge(a, b, feesUsd)
+          : { error: `unknown signal kind '${intent.signalKind}': edge cannot be verified` };
 
-    const buyNotional = buyLeg.priceUsd.mul(buyLeg.sizeCoin);
-    if (buyNotional.lte(0)) return null;
+    if ('error' in edge) return edge.error;
 
-    const feeBuy = computeFeeUsd(buyFeeSchedule, {
-      role: 'taker',
-      priceUsd: buyLeg.priceUsd,
-      sizeCoin: buyLeg.sizeCoin,
-      indexPriceUsd: buyLeg.indexPriceUsd,
-    });
-    const feeSell = computeFeeUsd(sellFeeSchedule, {
-      role: 'taker',
-      priceUsd: sellLeg.priceUsd,
-      sizeCoin: sellLeg.sizeCoin,
-      indexPriceUsd: sellLeg.indexPriceUsd,
-    });
-
-    const sellNotional = sellLeg.priceUsd.mul(sellLeg.sizeCoin);
-    const grossEdgeUsd = sellNotional.sub(buyNotional);
-    const netEdgeUsd = grossEdgeUsd.sub(feeBuy).sub(feeSell);
-    const netEdgeBps = netEdgeUsd.div(buyNotional).mul(10_000);
-
+    const netEdgeBps = edge.netEdgeUsd.div(edge.capitalUsd).mul(10_000);
     if (netEdgeBps.lt(this.config.RISK_MIN_EDGE_AFTER_FEES_BPS)) {
       return `net edge after fees ${netEdgeBps.toFixed(2)} bps < ${this.config.RISK_MIN_EDGE_AFTER_FEES_BPS}`;
     }
     return null;
+  }
+
+  /** Sum of taker fees on both legs; null when a venue has no fee schedule. */
+  private takerFeesUsd(a: ExecutionLeg, b: ExecutionLeg): Decimal | null {
+    const scheduleA = this.fees[a.venue];
+    const scheduleB = this.fees[b.venue];
+    if (!scheduleA || !scheduleB) return null;
+    return computeFeeUsd(scheduleA, {
+      role: 'taker',
+      priceUsd: a.priceUsd,
+      sizeCoin: a.sizeCoin,
+      indexPriceUsd: a.indexPriceUsd,
+    }).add(
+      computeFeeUsd(scheduleB, {
+        role: 'taker',
+        priceUsd: b.priceUsd,
+        sizeCoin: b.sizeCoin,
+        indexPriceUsd: b.indexPriceUsd,
+      }),
+    );
+  }
+
+  private crossVenueEdge(
+    a: ExecutionLeg,
+    b: ExecutionLeg,
+    feesUsd: Decimal,
+  ): { netEdgeUsd: Decimal; capitalUsd: Decimal } | { error: string } {
+    const buyLeg = a.side === 'buy' ? a : b.side === 'buy' ? b : null;
+    const sellLeg = a.side === 'sell' ? a : b.side === 'sell' ? b : null;
+    if (!buyLeg || !sellLeg) {
+      return { error: 'cross-venue intent must have one buy leg and one sell leg' };
+    }
+
+    const buyNotional = buyLeg.priceUsd.mul(buyLeg.sizeCoin);
+    if (buyNotional.lte(0)) return { error: 'cross-venue intent has non-positive buy notional' };
+    const sellNotional = sellLeg.priceUsd.mul(sellLeg.sizeCoin);
+
+    return {
+      netEdgeUsd: sellNotional.sub(buyNotional).sub(feesUsd),
+      capitalUsd: buyNotional,
+    };
+  }
+
+  private parityEdge(
+    a: ExecutionLeg,
+    b: ExecutionLeg,
+    feesUsd: Decimal,
+  ): { netEdgeUsd: Decimal; capitalUsd: Decimal } | { error: string } {
+    if (a.side !== b.side) {
+      return { error: 'yes-no-parity intent must have both legs on the same side' };
+    }
+    // A complete YES+NO set pays $1, so the tradable set count is the smaller
+    // of the two leg sizes — the surplus on the larger leg is naked exposure.
+    const sets = a.sizeCoin.lte(b.sizeCoin) ? a.sizeCoin : b.sizeCoin;
+    if (sets.lte(0)) return { error: 'yes-no-parity intent has non-positive size' };
+    const sumNotional = a.priceUsd.mul(a.sizeCoin).add(b.priceUsd.mul(b.sizeCoin));
+
+    if (a.side === 'buy') {
+      // Pay Σ ask now, collect $1 per set at settlement.
+      if (sumNotional.lte(0)) return { error: 'yes-no-parity intent has non-positive cost' };
+      return { netEdgeUsd: sets.sub(sumNotional).sub(feesUsd), capitalUsd: sumNotional };
+    }
+    // Mint a complete set for $1 (USDC collateral), sell both sides for Σ bid.
+    return { netEdgeUsd: sumNotional.sub(sets).sub(feesUsd), capitalUsd: sets };
   }
 }

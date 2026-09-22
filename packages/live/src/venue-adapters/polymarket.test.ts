@@ -45,7 +45,10 @@ describe('PolymarketOrderGateway', () => {
     vi.clearAllMocks();
   });
 
-  it('submits a marketable FAK (IOC) order by default and emits ack + fill', async () => {
+  it('submits a resting GTC order by default and emits ack + fill', async () => {
+    // createAndPostOrder only supports OrderType.GTC | OrderType.GTD; FAK/FOK
+    // are exclusive to createAndPostMarketOrder, which this gateway does not
+    // use, so GTC is always sent regardless of the requested time-in-force.
     const gw = new PolymarketOrderGateway({ privateKey: DUMMY_PRIVATE_KEY });
     const events: { kind: string; exchangeOrderId?: string }[] = [];
 
@@ -61,7 +64,7 @@ describe('PolymarketOrderGateway', () => {
     expect(mockClient.createAndPostOrder).toHaveBeenCalledWith(
       expect.objectContaining({ tokenID: 'token-abc', side: 'BUY', price: 0.45, size: 5 }),
       expect.objectContaining({ tickSize: '0.001', negRisk: false }),
-      'FAK',
+      'GTC',
     );
     expect(events.some((e) => e.kind === 'ack' && e.exchangeOrderId === 'order-123')).toBe(true);
     expect(events.some((e) => e.kind === 'fill')).toBe(true);

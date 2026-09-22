@@ -164,6 +164,12 @@ export class DeribitConnector extends BaseWsConnector implements VenueConnector 
             expected: err.expected,
             got: err.got,
           });
+          this.deps.bus.emit('venue.sequence-gap', {
+            venue: this.venue,
+            instrument: err.instrument,
+            tsMs: this.deps.clock.nowMs(),
+            detail: `expected ${String(err.expected)}, got ${String(err.got)}`,
+          });
           this.resyncBook(err.instrument);
         } else {
           this.deps.logger.warn('deribit: failed to handle channel message', {

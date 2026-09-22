@@ -5,6 +5,7 @@ import {
   HealthRegistry,
   InMemoryEventBus,
   LiveClock,
+  LOG_REDACT_PATHS,
   type ConnectorStatus,
   type Logger,
   type Venue,
@@ -70,7 +71,7 @@ export function venueConfigs(cfg: CollectorConfig): VenueRuntimeConfigs {
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const log = pino({ level: cfg.LOG_LEVEL });
+  const log = pino({ level: cfg.LOG_LEVEL, redact: LOG_REDACT_PATHS });
   const logger = toLogger(log);
 
   const bus = new InMemoryEventBus();

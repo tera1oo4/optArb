@@ -96,14 +96,27 @@ function makeFeeSchedules() {
 
 function makeBaseRiskConfig(): RiskConfig {
   return {
-    RISK_MAX_NOTIONAL_PER_TRADE_USD: 200_000,
-    RISK_MAX_NOTIONAL_PER_VENUE_USD: 500_000,
-    RISK_MAX_NOTIONAL_GLOBAL_USD: 1_000_000,
-    RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: 500_000,
-    RISK_MAX_DAILY_LOSS_USD: 50_000,
+    RISK_MAX_NOTIONAL_PER_TRADE_USD: dec('200000'),
+    RISK_MAX_NOTIONAL_PER_VENUE_USD: dec('500000'),
+    RISK_MAX_NOTIONAL_GLOBAL_USD: dec('1000000'),
+    RISK_MAX_EXPOSURE_PER_UNDERLYING_USD: dec('500000'),
+    RISK_MAX_DAILY_LOSS_USD: dec('50000'),
+    RISK_MAX_DAILY_DRAWDOWN_USD: dec('50000'),
     RISK_MAX_QUOTE_AGE_MS: 2_000,
-    RISK_MIN_EDGE_AFTER_FEES_BPS: 5,
+    RISK_MIN_EDGE_AFTER_FEES_BPS: dec('5'),
+    RISK_MAX_INDEX_DIVERGENCE_BPS: dec('30'),
+    RISK_MAX_LEG_SKEW_MS: 500,
     RISK_KILL_SWITCH: false,
+    RISK_MAX_DELTA_PER_UNDERLYING: undefined,
+    RISK_MAX_VEGA_PER_UNDERLYING_USD: undefined,
+    RISK_MAX_GAMMA_PER_UNDERLYING_USD: undefined,
+    RISK_MIN_MARGIN_HEADROOM_USD: undefined,
+    RISK_MAX_POLYMARKET_SETTLEMENT_USD: undefined,
+    RISK_AUTO_KILL_HEARTBEAT_IDLE_MS: 60_000,
+    RISK_AUTO_KILL_SEQUENCE_GAPS: 3,
+    RISK_AUTO_KILL_SEQUENCE_WINDOW_MS: 60_000,
+    RISK_AUTO_KILL_REJECT_COUNT: 5,
+    RISK_AUTO_KILL_REJECT_WINDOW_MS: 60_000,
   };
 }
 
@@ -230,7 +243,7 @@ describe('BacktestEngine', () => {
     const result = await engine.run({
       captureFile: file,
       signalConfig: { minSpreadBps: dec(25), maxQuoteAgeMs: 2_000, minSizeUsd: dec(1_000) },
-      riskConfig: { ...makeBaseRiskConfig(), RISK_MAX_NOTIONAL_PER_TRADE_USD: 1_000 },
+      riskConfig: { ...makeBaseRiskConfig(), RISK_MAX_NOTIONAL_PER_TRADE_USD: dec('1000') },
       feeSchedules: makeFeeSchedules(),
       paperMaxNotionalUsd: dec(100_000),
       reportIntervalMs: 60_000,

@@ -212,17 +212,32 @@ describe('black76Delta', () => {
   });
 
   it('is ~1 for a deep ITM call and ~-1 for a deep ITM put', () => {
-    const base = { strike: dec('100'), vol: dec('0.3'), timeToExpiryYears: dec('0.5'), rate: dec('0.05') };
+    const base = {
+      strike: dec('100'),
+      vol: dec('0.3'),
+      timeToExpiryYears: dec('0.5'),
+      rate: dec('0.05'),
+    };
     expect(black76Delta({ ...base, forward: dec('400'), type: 'call' }).gt(dec('0.99'))).toBe(true);
     expect(black76Delta({ ...base, forward: dec('25'), type: 'put' }).lt(dec('-0.99'))).toBe(true);
   });
 
   it('degenerates to a step at expiry (t <= 0) and zero vol', () => {
-    const atExpiry = { strike: dec('100'), vol: dec('0.3'), timeToExpiryYears: dec('0'), rate: dec('0') };
+    const atExpiry = {
+      strike: dec('100'),
+      vol: dec('0.3'),
+      timeToExpiryYears: dec('0'),
+      rate: dec('0'),
+    };
     expect(black76Delta({ ...atExpiry, forward: dec('101'), type: 'call' }).toString()).toBe('1');
     expect(black76Delta({ ...atExpiry, forward: dec('99'), type: 'call' }).toString()).toBe('0');
     expect(black76Delta({ ...atExpiry, forward: dec('99'), type: 'put' }).toString()).toBe('-1');
-    const zeroVol = { strike: dec('100'), vol: dec('0'), timeToExpiryYears: dec('1'), rate: dec('0.05') };
+    const zeroVol = {
+      strike: dec('100'),
+      vol: dec('0'),
+      timeToExpiryYears: dec('1'),
+      rate: dec('0.05'),
+    };
     expect(black76Delta({ ...zeroVol, forward: dec('120'), type: 'call' }).toString()).toBe('1');
     expect(black76Delta({ ...zeroVol, forward: dec('80'), type: 'put' }).toString()).toBe('-1');
   });

@@ -216,6 +216,12 @@ export class BinanceConnector implements VenueConnector {
           instrument: err.instrument,
           detail: err.detail,
         });
+        this.deps.bus.emit('venue.sequence-gap', {
+          venue: this.venue,
+          instrument: err.instrument,
+          tsMs: this.deps.clock.nowMs(),
+          detail: err.detail,
+        });
         resetBook(this.ctx, err.instrument);
         void this.fetchSnapshot(err.instrument);
       } else {
